@@ -33,6 +33,23 @@ UNKNOWN_BGR = (150, 150, 150)
 VOTE_WINDOW = 7      # frames of history kept per track
 MIN_VOTES = 3        # ... and how many it takes before a label is shown
 
+#: Consecutive measurements that disagree with the settled vote before the vote
+#: is thrown away rather than averaged into.
+#:
+#: A vote is only worth taking while the frames in it belong to the SAME ball,
+#: and at 4.9 fps they sometimes do not. When the cue ball reaches its object
+#: ball the two occupy nearly the same place on the frame where they touch, and
+#: the tracker hands the id across: one track was the cue ball, and from the
+#: next frame it is a solid rolling toward a pocket. Measured here - track 173
+#: read white 0.93-0.99 for a hundred frames, then 0.06, 0.19, 0.05.
+#:
+#: Averaging across that is worse than useless. The stale cue votes outnumbered
+#: the true ones, the uniqueness rule then demoted the losing cue claim to
+#: STRIPE, and a solid was potted as the wrong group - a foul against a player
+#: who had just potted their own ball. Three measurements agreeing against the
+#: vote are not noise; they are a different ball, so the vote starts over.
+SWAP_FRAMES = 3
+
 
 class Label:
     """What the overlay draws for one ball."""
@@ -57,6 +74,7 @@ class BallClassRegistry:
 
     def __init__(self):
         self.votes = {}        # track id -> deque of recent class names
+        self.fresh = {}        # track id -> the last few RAW measurements
         self.stats = {}        # track id -> the most recent measurement
         self.events = []
 
@@ -70,7 +88,18 @@ class BallClassRegistry:
             cls, stats = ball_class.classify_ball(hsv, x, y, r, white_ref)
             if cls is None:
                 continue
-            self.votes.setdefault(tid, deque(maxlen=VOTE_WINDOW)).append(cls)
+            votes = self.votes.setdefault(tid, deque(maxlen=VOTE_WINDOW))
+            fresh = self.fresh.setdefault(tid, deque(maxlen=SWAP_FRAMES))
+            fresh.append(cls)
+            if self._swapped(votes, fresh):
+                self.events.append({"frame": frame, "track": tid,
+                                    "type": "swapped",
+                                    "from": Counter(votes).most_common(1)[0][0],
+                                    "to": fresh[0]})
+                votes.clear()
+                votes.extend(fresh)
+            else:
+                votes.append(cls)
             self.stats[tid] = stats
 
         labels = {}
@@ -91,11 +120,26 @@ class BallClassRegistry:
         cls, n = Counter(votes).most_common(1)[0]
         return Label(cls, "voted" if n >= MIN_VOTES else "pending")
 
+    @staticmethod
+    def _swapped(votes, fresh):
+        """Have the last few measurements all disagreed with the settled vote?
+
+        Only asked of a track that HAS a settled vote: a few frames of history
+        can disagree with each other honestly, and a young track has nothing
+        worth throwing away.
+        """
+        if len(fresh) < SWAP_FRAMES or len(votes) < MIN_VOTES:
+            return False
+        if len(set(fresh)) > 1:
+            return False
+        return fresh[0] != Counter(votes).most_common(1)[0][0]
+
     def _forget(self, live):
         """Drop tracks the tracker has given up on, so votes cannot outlive them."""
         live = set(live)
         for tid in [t for t in self.votes if t not in live]:
             del self.votes[tid]
+            self.fresh.pop(tid, None)
             self.stats.pop(tid, None)
 
     def _enforce_unique(self, labels, frame):

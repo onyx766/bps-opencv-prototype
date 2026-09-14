@@ -26,6 +26,7 @@ import argparse
 import math
 import os
 import sys
+from collections import namedtuple
 
 import cv2
 import numpy as np
@@ -183,30 +184,158 @@ def estimate_ball_radius(not_felt, default=20):
     return int(round(np.median(radii))) if radii else default
 
 
-def drop_oversize_blobs(not_felt, r, max_balls=MAX_BALLS):
-    """Erase anything too big to be a pile of balls.
+#: How LONG a connected region may be, in ball diameters, and still be a pile
+#: of balls. The longest thing fifteen touching balls can make is a full rack,
+#: which measured 4.7 diameters across on this footage; the arm-and-cue that
+#: reaches in over the table measured 13.6 and a cue lying on the cloth 14.7.
+#: Seven sits between them with room on both sides.
+INTRUSION_SPAN = 7.0
+
+#: A region that REACHES IN over the table boundary is an intrusion once it is
+#: this big, in ball areas, and this loosely packed. Both halves are needed. A
+#: ball resting against a cushion touches the boundary too - the table mask is
+#: eroded inward, so the rail end of the ball sits on its edge - and so does
+#: every hairline of glare along the rails, so touching alone proves nothing.
+#: Size and packing are what separate them: balls pack densely, filling 0.75 to
+#: 0.86 of their own bounding box singly, 0.41 to 0.48 in pairs and 0.59 for a
+#: whole rack, while an arm crossing its box on the diagonal filled 0.10.
+INTRUSION_EDGE_AREA = 3.0
+INTRUSION_FILL = 0.35
+
+#: Regions below this many ball areas are never tested. Nothing that small is
+#: an arm, and skipping them keeps the shape work off the fifteen-odd little
+#: blobs of rail glare every frame carries.
+INTRUSION_MIN_AREA = 2.0
+
+#: Half-width, in ball radii, at which an erased region was solid enough to
+#: have HIDDEN a real ball or GROWN a phantom one - measured as the largest
+#: disc that fits inside it. A hand measured 2.9 radii and the rack 2.9; a bare
+#: cue shaft 0.57 and a hairline of rail glare 0.3. This is not what decides
+#: whether a region is erased - a cue is erased either way - it is what decides
+#: whether its presence should stop the scoreboard trusting the frame, and a
+#: cue shaft too thin to hold a ball has no business stopping anything.
+INTRUSION_THICK = 0.8
+
+#: One erased region. `bulky` is the flag the game layer reads: something was
+#: on the table that could have hidden a ball, so this frame's count is a
+#: guess. `box` is (x, y, w, h), for drawing it on the overlay.
+Intrusion = namedtuple("Intrusion", "label area span thick fill edge bulky why x y box")
+
+
+def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
+                    span=INTRUSION_SPAN, edge_area=INTRUSION_EDGE_AREA,
+                    fill=INTRUSION_FILL, thick=INTRUSION_THICK):
+    """Which connected regions of the mask are not balls but a player.
 
     A player's arm over the table is not felt either, and a ball-sized disc
     fits it perfectly at hundreds of positions - one frame of this footage
-    produced 58 "balls", forty of them along a forearm. No local test tells the
+    produced 58 "balls", forty of them along a forearm. No LOCAL test tells the
     two apart: a forearm has edges, colour variation and a rounded outline, and
-    so does a ball wedged in a rack.
+    so does a ball wedged in a rack. Asked pixel by pixel, a knuckle is a ball.
 
-    What does tell them apart is total size. Only sixteen balls exist, so one
-    connected region can hold at most sixteen ball areas. The arm measured
-    forty-nine; the entire fifteen-ball rack, fifteen. A ball hidden under an
-    arm is lost for those frames, which costs nothing - it was not visible.
+    Asked of the WHOLE REGION it is not, and that is the trick here. An arm,
+    the hand on the end of it and the cue in that hand are one connected black
+    mass, because they touch; so the fingertips that each look exactly like a
+    ball are part of a region that, taken together, obviously is not one. Three
+    things give it away, any one of which is enough:
+
+      too big     Only sixteen balls exist, so one region holds at most sixteen
+                  ball areas however they are piled. The arm measured 24 and,
+                  earlier in this footage, 49; the entire fifteen-ball rack, 15.
+      too long    A rack is the longest thing balls alone can make - 4.7 ball
+                  diameters. The arm-and-cue spanned 13.6.
+      reaching in Balls sit ON the table; an arm comes in OVER its edge. A
+                  region that touches the table boundary, is bigger than a few
+                  balls and is packed far too loosely to be balls came from
+                  outside.
+
+    Whichever fires, the answer is the same and it is the point of doing this
+    by region: the ENTIRE mass is rejected, every attached fingertip with it.
+    Picking off the fingers one at a time cannot work, because one at a time
+    they are indistinguishable from balls.
+
+    `table` is the table mask the balls were found inside; without it the
+    reaching-in test is skipped and only the size tests are left.
+
+    Returns (labels, [Intrusion, ...]) - the label image so the caller can
+    erase by region without labelling the mask twice.
     """
-    count, labels, stats, _ = cv2.connectedComponentsWithStats(not_felt)
-    limit = max_balls * math.pi * r * r
+    count, labels, stats, cent = cv2.connectedComponentsWithStats(not_felt)
+    ball_area = math.pi * r * r
+    # One distance transform for the whole mask: regions are separated by
+    # background, so each one's distance-to-outside is the same either way.
+    dist = cv2.distanceTransform(not_felt, cv2.DIST_L2, 5)
+    border = None
+    if table is not None:
+        border = cv2.subtract(table, cv2.erode(table, np.ones((5, 5), np.uint8)))
+
+    found = []
+    for i in range(1, count):                     # 0 is the background
+        area = stats[i, cv2.CC_STAT_AREA]
+        if area < INTRUSION_MIN_AREA * ball_area:
+            continue
+        x0, y0 = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP]
+        w, h = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        roi = np.where(labels[y0:y0 + h, x0:x0 + w] == i, 255, 0).astype(np.uint8)
+        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not cnts:
+            continue
+        # The MINIMUM-area rectangle, not the upright bounding box: an arm lies
+        # across the table on the diagonal, and a rack measured by its upright
+        # box is 7.1 diameters on the diagonal rather than the 4.7 it really is
+        # - which would condemn the rack and let the arm off on the same number.
+        (rw, rh) = cv2.minAreaRect(max(cnts, key=cv2.contourArea))[1]
+        major = max(rw, rh)
+        long_ = major / (2.0 * r)
+        packed = area / max(1.0, rw * rh)
+        half = float(dist[y0:y0 + h, x0:x0 + w][roi > 0].max()) / float(r)
+        touches = (border is not None and
+                   cv2.countNonZero(cv2.bitwise_and(roi,
+                                                    border[y0:y0 + h,
+                                                           x0:x0 + w])) > 0)
+
+        if area > max_balls * ball_area:
+            why = f"{area / ball_area:.0f} ball areas in one piece"
+        elif long_ > span:
+            why = f"{long_:.1f} ball diameters long"
+        elif (touches and area >= edge_area * ball_area and packed < fill):
+            why = "reaches in over the table edge"
+        else:
+            continue
+
+        found.append(Intrusion(
+            label=i, area=round(area / ball_area, 2), span=round(long_, 2),
+            thick=round(half, 2), fill=round(packed, 2), edge=bool(touches),
+            bulky=half >= thick, why=why,
+            x=int(cent[i][0]), y=int(cent[i][1]),
+            box=(int(x0), int(y0), int(w), int(h))))
+    return labels, found
+
+
+def drop_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS):
+    """The mask with every non-ball region erased whole, and what was erased.
+
+    A ball hidden under an arm is lost for those frames, which costs nothing -
+    it was not visible. A ball erased because it happened to touch the arm
+    costs nothing either, for the same reason, and losing it is the entire
+    point: attached to the arm it was going to be counted at the wrong place.
+    """
+    labels, found = find_intrusions(not_felt, r, table, max_balls)
+    if not found:
+        return not_felt, found
     out = not_felt.copy()
-    for i in range(1, count):
-        if stats[i, cv2.CC_STAT_AREA] > limit:
-            out[labels == i] = 0
-    return out
+    for it in found:
+        out[labels == it.label] = 0
+    return out, found
 
 
-def find_balls(not_felt, r, coverage=BALL_COVERAGE, separation=BALL_SEPARATION):
+def drop_oversize_blobs(not_felt, r, max_balls=MAX_BALLS):
+    """Back-compatible wrapper: the cleaned mask alone, with no table mask."""
+    return drop_intrusions(not_felt, r, None, max_balls)[0]
+
+
+def find_balls(not_felt, r, coverage=BALL_COVERAGE, separation=BALL_SEPARATION,
+               table=None, drop=True):
     """One centre per ball, by asking where a ball-sized disc fits the mask.
 
     Correlating a filled disc against the mask scores every pixel by the
@@ -214,8 +343,15 @@ def find_balls(not_felt, r, coverage=BALL_COVERAGE, separation=BALL_SEPARATION):
     explains what was seen. Taking the peaks greedily and suppressing a
     neighbourhood after each separates touching balls: the score stays high
     across a whole cluster, but only one peak per ball survives suppression.
+
+    `drop=False` says the mask has already been through drop_intrusions, which
+    is what a caller that wants to SEE the intrusions does - otherwise they are
+    found, erased and forgotten in here.
     """
-    mask = drop_oversize_blobs(not_felt, r).astype(np.float32) / 255.0
+    mask = not_felt
+    if drop:
+        mask = drop_intrusions(mask, r, table)[0]
+    mask = mask.astype(np.float32) / 255.0
     disc = np.zeros((2 * r + 1, 2 * r + 1), np.float32)
     cv2.circle(disc, (r, r), r, 1.0, -1)
     score = cv2.filter2D(mask, -1, disc / disc.sum())
@@ -261,7 +397,7 @@ def detect_felt(img, ball_r=None, felt_low=FELT_LOW, felt_high=FELT_HIGH,
     not_felt = not_felt_mask(img, table_mask, felt_low, felt_high)
     if ball_r is None:
         ball_r = estimate_ball_radius(not_felt)
-    balls = find_balls(not_felt, ball_r)
+    balls = find_balls(not_felt, ball_r, table=table_mask)
     balls.sort(key=lambda b: (b[1], b[0]))
     return balls, not_felt, table_mask
 

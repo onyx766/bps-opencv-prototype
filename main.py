@@ -8,7 +8,15 @@ Three pieces, in order, after a one-time pocket click:
                 so this is paid once: later runs load the file and go straight
                 into the video. Clicking beats finding them automatically - a
                 pocket is a dark hole, and so is every shadow under a rail.
-  1. DETECT   - server.py's felt mode finds where the balls are. The camera is
+  1. DETECT   - server.py's felt mode finds where the balls are, and rejects
+                the player: an arm, the hand on it and the cue it holds are one
+                connected non-felt mass, and a mass too big, too long or
+                reaching in over the table edge is erased WHOLE - every
+                fingertip that looked exactly like a ball going with it,
+                because one at a time they are indistinguishable from balls.
+                What is left over is handed to logic.py as a fact about the
+                frame rather than thrown away: a hand is on the table, so this
+                frame's ball count is not worth counting. The camera is
                 fixed, so the table outline and the ball radius are measured
                 once and reused, which is most of the speed-up over per-frame
                 work. Every ball gets the SAME radius: at a fixed height they
@@ -59,8 +67,9 @@ import numpy as np
 
 import detect_pocket
 import logic
-from server import (FELT_HIGH, FELT_LOW, estimate_ball_radius, felt_mask,
-                    find_balls, not_felt_mask, sample_felt, table_region)
+from server import (FELT_HIGH, FELT_LOW, drop_intrusions, estimate_ball_radius,
+                    felt_mask, find_balls, not_felt_mask, sample_felt,
+                    table_region)
 from track_identity import UNKNOWN_BGR, BallClassRegistry
 
 # Tried in order when no video argument is given - first one that exists wins.
@@ -183,11 +192,19 @@ def calibrate(frame, felt_low, felt_high, shrink, ball_r=None, pockets=None,
 
 
 def detect_frame(frame, cal):
-    """Per-frame half of the pipeline, using the cached calibration."""
+    """Per-frame half of the pipeline, using the cached calibration.
+
+    Returns (balls, intrusions). The intrusions - arms, hands, cues, erased
+    from the mask whole before any ball is looked for - are handed back rather
+    than discarded because their PRESENCE is worth more than their removal: a
+    frame with a hand in it is a frame whose ball count means nothing, and the
+    game layer would rather wait for the next one than count through it.
+    """
     not_felt = not_felt_mask(frame, cal["table"], cal["low"], cal["high"])
-    balls = find_balls(not_felt, cal["r"])
+    clean, intrusions = drop_intrusions(not_felt, cal["r"], cal["table"])
+    balls = find_balls(clean, cal["r"], drop=False)
     balls.sort(key=lambda b: (b[1], b[0]))
-    return balls
+    return balls, intrusions
 
 
 #: Ring THICKNESS per confidence: a thicker ring is a stronger claim. Ring
@@ -341,6 +358,8 @@ def scoreboard(W, height, session, index, total, fps_now):
                     BOARD_GREEN if live else BOARD_WHITE,
                     max(1, int(round(2 * s))), anchor)
         sub = game.group_name(i)
+        if game.wins[i]:
+            sub += DOT + f"{game.wins[i]} RACK" + ("S" if game.wins[i] > 1 else "")
         if game.fouls[i]:
             sub += DOT + f"{game.fouls[i]} FOUL" + ("S" if game.fouls[i] > 1 else "")
         _board_text(board, sub, nx, 0.64 * height, 0.42 * s, BOARD_DIM, 1, anchor)
@@ -351,8 +370,9 @@ def scoreboard(W, height, session, index, total, fps_now):
                 0.46 * height, 0.80 * s, BOARD_GREY, max(1, int(round(1.5 * s))),
                 "center")
     _board_text(board,
-                DOT.join([f"SHOT {game.shot}", f"INNING {game.inning}",
-                          session.clock, f"BALLS {session.balls}"]),
+                DOT.join([f"RACK {game.rack}", f"SHOT {game.shot}",
+                          f"INNING {game.inning}", session.clock,
+                          f"BALLS {session.balls}"]),
                 W / 2, 0.66 * height, 0.42 * s, BOARD_DIM, 1, "center")
 
     # The status line is the board's only moving part, so it carries the colour:
@@ -363,8 +383,14 @@ def scoreboard(W, height, session, index, total, fps_now):
     _board_text(board, status, W / 2, 0.82 * height, 0.52 * s, colour,
                 max(1, int(round(1.2 * s))), "center")
 
-    _board_text(board, f"FRAME {index}/{total}{DOT}{fps_now:.1f} FPS", edge,
-                0.93 * height, 0.38 * s, BOARD_DIM, 1, "left")
+    foot = f"FRAME {index}/{total}{DOT}{fps_now:.1f} FPS"
+    # Say when the count being shown is a held one. BALLS on the stat line is
+    # read as fact, and during an intrusion it is not one - the arm has taken
+    # whatever it was lying across out of the mask with it.
+    if session.busy:
+        foot += DOT + "HAND ON THE TABLE"
+    _board_text(board, foot, edge, 0.93 * height, 0.38 * s,
+                BOARD_RED if session.busy else BOARD_DIM, 1, "left")
     if game.ball_in_hand and not game.over:
         _board_text(board, "BALL IN HAND", W - edge, 0.93 * height, 0.38 * s,
                     BOARD_RED, 1, "right")
@@ -375,13 +401,87 @@ def scoreboard(W, height, session, index, total, fps_now):
     return board
 
 
+def draw_win(frame, session, scale):
+    """Celebrate the rack over the video: a band, a name, and some movement.
+
+    Movement because a still caption is easy to miss on a fast-moving overlay -
+    the text grows in, breathes while it holds, and fades rather than vanishing.
+    """
+    name, progress = session.celebration
+    game = session.game
+    H, W = frame.shape[:2]
+    grow = min(1.0, progress / 0.12) ** 0.5           # eased entry
+    fade = 1.0 if progress < 0.82 else max(0.0, (1.0 - progress) / 0.18)
+    pulse = 1.0 + 0.025 * math.sin(progress * 26.0)
+    size = scale * 2.4 * (0.55 + 0.45 * grow) * pulse
+
+    band = int(H * 0.20)
+    top = (H - band) // 2
+    shade = frame.copy()
+    cv2.rectangle(shade, (0, top), (W, top + band), (8, 12, 9), -1)
+    cv2.addWeighted(shade, 0.62 * fade, frame, 1.0 - 0.62 * fade, 0, frame)
+    line = max(1, int(round(2 * scale)))
+    cv2.line(frame, (0, top), (W, top), BOARD_GREEN, line)
+    cv2.line(frame, (0, top + band), (W, top + band), BOARD_GREEN, line)
+
+    text = f"{name.upper()} WINS"
+    thick = max(2, int(round(3.5 * scale)))
+    (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, size, thick)
+    # Faded text means blending toward the band, not toward black.
+    tint = tuple(int(20 + (c - 20) * fade) for c in BOARD_GREEN)
+    cv2.putText(frame, text, ((W - tw) // 2, int(top + band * 0.46 + th / 2)),
+                cv2.FONT_HERSHEY_SIMPLEX, size, tint, thick, cv2.LINE_AA)
+
+    # What the rack finished at, so the celebration is also the final score -
+    # the board behind it resets as soon as the next triangle is set.
+    sub = DOT.join([f"RACK {game.rack}",
+                    f"{game.score(0)} - {game.score(1)}",
+                    game.status.split(" - ")[-1]])
+    _board_text(frame, sub, W / 2, top + band * 0.82, 0.66 * scale,
+                tuple(int(20 + (c - 20) * fade) for c in BOARD_GREY),
+                max(1, int(round(1.3 * scale))), "center")
+    return frame
+
+
+#: Intrusions are drawn in the board's warning red, the same hue a foul uses,
+#: because they mean the same thing to a viewer: what you are looking at is not
+#: being counted.
+INTRUSION_BGR = BOARD_RED
+
+
+def draw_intrusions(img, intrusions, scale=1.0):
+    """Outline what was erased from the mask, and say why.
+
+    Worth the pixels because this is the one part of the pipeline that throws
+    away things that look exactly like balls. Drawn, it is obvious that the arm
+    went and the balls stayed; undrawn, a run where the detector quietly ate a
+    corner of the table looks identical to a run where it worked.
+    """
+    for it in intrusions or []:
+        x, y, w, h = it.box
+        thick = max(1, int(round(scale * (2 if it.bulky else 1))))
+        cv2.rectangle(img, (x, y), (x + w, y + h), INTRUSION_BGR, thick)
+        if not it.bulky:
+            continue          # a cue shaft or a hairline of glare: no caption
+        text = f"NOT BALLS - {it.why}".upper()
+        cv2.putText(img, text, (x, max(int(14 * scale), y - int(8 * scale))),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, (0, 0, 0),
+                    thick + 2, cv2.LINE_AA)
+        cv2.putText(img, text, (x, max(int(14 * scale), y - int(8 * scale))),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5 * scale, INTRUSION_BGR,
+                    thick, cv2.LINE_AA)
+
+
 def draw(frame, items, index, total, fps_now, scale=1.0, pockets=None,
-         session=None, board_h=0):
+         session=None, board_h=0, intrusions=None):
     """items: [(track_id, x, y, r, Label_or_None), ...]"""
     # Pockets first: they are fixed scenery, and a ball's ring must sit on top
     # of a pocket marker when the two overlap, not under it.
     detect_pocket.draw_pockets(frame, pockets, scale)
+    draw_intrusions(frame, intrusions, scale)
     draw_overlay(frame, items, scale)
+    if session is not None and session.celebration:
+        draw_win(frame, session, scale)
     if session is None or board_h <= 0:
         return frame
     return np.vstack([
@@ -430,6 +530,10 @@ def main():
                     help="radius of the blind spot cut out of the table mask at "
                          f"each pocket, in ball radii (default {POCKET_BLOCK}); "
                          "0 puts the pocket mouths back in as ball candidates")
+    ap.add_argument("--no-hand-gate", action="store_true",
+                    help="keep erasing arms and cues from the mask, but do not "
+                         "let their presence hold back the count - judge every "
+                         "settling the moment the balls stop, hand or no hand")
     ap.add_argument("--events", default=None,
                     help="write the identity, pot and game logs to this JSON file")
     ap.add_argument("--label-scale", type=float, default=1.0,
@@ -502,8 +606,7 @@ def main():
     play_fps = max(1.0, src_fps / args.stride)
     session = logic.GameSession(pockets, cal["r"], fps=src_fps,
                                 players=(args.player_a, args.player_b),
-                                mouth=args.pot_radius,
-                                identified=not args.no_id)
+                                mouth=args.pot_radius)
 
     # Writing at source fps / stride keeps the output playing at real speed.
     writer = cv2.VideoWriter(out_path, cv2.VideoWriter_fourcc(*"mp4v"),
@@ -546,9 +649,16 @@ def main():
                                 ball_r=args.ball_r, pockets=pockets,
                                 block=args.pocket_block)
 
-            balls = detect_frame(frame, cal)
+            balls, intrusions = detect_frame(frame, cal)
             counts.append(len(balls))
             tracked = tracker.update(balls)
+            # Only the BULKY ones stop the clock: a region big enough to have
+            # hidden a ball or grown a phantom. A cue shaft lying on the cloth
+            # is erased too, but it is too thin to have covered anything, and
+            # treating it as a reason to distrust the frame would stall the
+            # scoreboard through every shot that was still being lined up.
+            hand = (any(it.bulky for it in intrusions)
+                    and not args.no_hand_gate)
 
             items = [(tid, x, y, r, None) for tid, x, y, r in tracked]
             labels = {}
@@ -559,7 +669,7 @@ def main():
                          for tid, x, y, r in tracked]
             id_counts.append(sum(1 for it in items if it[4] is not None))
 
-            for pot in session.update(tracked, labels, idx):
+            for pot in session.update(tracked, labels, idx, intruding=hand):
                 print(f"  POT   frame {idx}  {pot.cls.upper()} in {pot.pocket} "
                       f"(track {pot.track}, {pot.dist:.0f} px out, "
                       f"closing {pot.closed:.0f} px/frame)", flush=True)
@@ -581,7 +691,7 @@ def main():
             fps_now = processed / elapsed if elapsed else 0.0
 
             out = draw(frame, items, idx, total, fps_now, label_scale,
-                       pockets, session, board_h)
+                       pockets, session, board_h, intrusions)
             writer.write(out)
 
             if args.show:
@@ -628,8 +738,21 @@ def main():
         print(f"        {game.shot} shots, {game.inning} innings, "
               f"{len(session.all_pots)} pots, "
               f"{game.fouls[0]}+{game.fouls[1]} fouls")
-        print(f"        rejected: {len(session.ignored)} pots off-shot, "
-              f"{len(session.pots.rejected)} too short-lived to be balls")
+        print(f"        {len(session.episodes)} episodes of motion, "
+              f"{len(session.pots.rejected)} claims refused")
+        waited = [e for e in session.episodes if e.get("held")]
+        print(f"        hands/cues on the table in {session.busy_frames} of "
+              f"{processed} frames "
+              f"({100.0 * session.busy_frames / max(1, processed):.0f}%), "
+              f"{len(waited)} settlings held for a clear table"
+              + (f", {len(session.waits)} judged without one"
+                 if session.waits else ""))
+        # The self-check: a ball left the table and nothing was credited for it.
+        # Each of these is a pot that went unscored, so print where to look.
+        if session.unexplained:
+            print(f"        UNEXPLAINED: {len(session.unexplained)} settlings "
+                  f"lost a ball with nothing credited, at frames "
+                  f"{[e['frame'] for e in session.unexplained][:12]}")
         print(f"        {game.status}")
 
     if args.events:
@@ -638,9 +761,14 @@ def main():
         with open(ev_path, "w") as fh:
             json.dump({"identity": [] if registry is None else registry.events,
                        "pots": [p._asdict() for p in session.all_pots],
+                       "episodes": session.episodes,
+                       "unexplained": session.unexplained,
                        "rejected": {
-                           "off_shot": [p._asdict() for p in session.ignored],
-                           "short_lived": session.pots.rejected},
+                           "claims": [p._asdict() for p in session.ignored],
+                           "why": session.pots.rejected},
+                       "intrusions": {"busy_frames": session.busy_frames,
+                                      "frames": processed,
+                                      "gave_up_waiting": session.waits},
                        "game": session.game.log,
                        "summary": session.game.summary()}, fh, indent=2)
         print(f"Saved:  {ev_path}")
