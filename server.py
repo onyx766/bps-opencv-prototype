@@ -2,17 +2,18 @@
 BPS prototype - detect a ball's position in a single image.
 
 Three detection modes:
-  1. "felt"   - top-down pool table (DEFAULT). Auto-samples the felt colour and
-                keeps whatever on the table is NOT felt. No HSV to hand-tune:
-                one felt colour is measured from the image, instead of trying to
-                describe fifteen different ball colours.
+  1. "felt"   - top-down pool table (DEFAULT). Keeps whatever on the table is
+                NOT felt, then fits one ball-sized disc everywhere it can go.
+                Describing the single felt colour is easier than describing
+                fifteen ball colours, and a fixed camera means every ball is
+                the same size, so the radius is measured once and shared.
   2. "hough"  - shape-based (finds circles, works for any ball color)
   3. "color"  - HSV color mask + contour (fast and robust if you know the ball color)
 
 Usage:
   python server.py                             # reads test.png/.jpg, writes result.png
   python server.py other.jpg                   # different input image
-  python server.py --min-r 15 --max-r 30       # ball radius window, in pixels
+  python server.py --ball-r 20                 # force the ball radius, in pixels
   python server.py --debug                     # also dump the felt/table masks
   python server.py --mode hough --top 1        # draw only the strongest circle
   python server.py --mode color --hsv-low 5 120 120 --hsv-high 20 255 255
@@ -22,6 +23,7 @@ Output:
 """
 
 import argparse
+import math
 import os
 import sys
 
@@ -73,6 +75,37 @@ def detect_hough(img, min_radius=None, max_radius=None):
     return [(x, y, r) for x, y, r in circles]
 
 
+# Felt colour window, read off tuner.py against this venue's footage:
+#   H 86-107   S 215-255   V 215-255
+# Absolute bounds beat the old "sample the median, allow +/- a tolerance"
+# approach here because the tolerance had to be opened to S+/-130 to stop
+# glare reading as a ball, and that wide a window also swallowed dark blue
+# balls whose hue sits next to the cloth.
+FELT_LOW = (86, 215, 215)
+FELT_HIGH = (107, 255, 255)
+
+# A specular highlight is still felt: same hue, saturation washed out, value
+# near maximum. Held as a SECOND felt band so a reflection on the cloth does
+# not come back as a phantom ball, while the main window stays tight enough
+# to keep the blue balls. Measured on the reflection in this footage: S~132,
+# V~255, which this band covers and no ball in the set does.
+GLARE_S_MIN = 100
+GLARE_V_MIN = 240
+
+
+def felt_mask(hsv, low=FELT_LOW, high=FELT_HIGH):
+    """Felt pixels: the tuned colour window, plus its specular-highlight band."""
+    lo = np.array(low, np.uint8)
+    hi = np.array(high, np.uint8)
+    mask = cv2.inRange(hsv, lo, hi)
+
+    glare_s_hi = max(int(lo[1]), GLARE_S_MIN + 1)
+    glare = cv2.inRange(hsv,
+                        np.array([lo[0], GLARE_S_MIN, GLARE_V_MIN], np.uint8),
+                        np.array([hi[0], glare_s_hi, 255], np.uint8))
+    return cv2.bitwise_or(mask, glare)
+
+
 def sample_felt(hsv, H, W):
     """Median HSV of the frame centre - on a top-down table shot that is felt."""
     patch = hsv[int(H * 0.4):int(H * 0.6), int(W * 0.4):int(W * 0.6)].reshape(-1, 3)
@@ -110,117 +143,125 @@ def fill_holes(mask):
     return out
 
 
-def split_blobs(not_felt, r_typ, peak_frac=0.5):
-    """Find one centre per ball, splitting balls that touch.
+#: How well a disc must match to count as a ball, as the fraction of its area
+#: that is non-felt. Measured on this footage: 0.90 finds only separated balls
+#: (13 of 16), 0.85 finds 15, 0.80 finds all 16, and 0.75 finds no more - so
+#: 0.80 sits in the middle of the range that gets the count right.
+BALL_COVERAGE = 0.80
 
-    A distance transform peaks at the centre of each ball; thresholding it
-    well below the ball radius separates a cluster into one component per
-    ball, where plain contours would report the whole cluster as one lump.
+#: Suppression distance around an accepted centre, in ball radii. Two touching
+#: balls are 2r apart, so a second peak closer than this is the same ball found
+#: twice rather than its neighbour.
+BALL_SEPARATION = 1.6
+
+#: Most balls that can be on the table at once: fifteen plus the cue.
+MAX_BALLS = 16
+
+
+def estimate_ball_radius(not_felt, default=20):
+    """One radius for every ball, measured off the blobs that are single balls.
+
+    A fixed overhead camera sees every ball at the same size, so a per-ball
+    radius guess is noise, not signal - and a radius that is wrong by a few
+    pixels drags the colour sample onto the cloth or onto a neighbour. Balls
+    that touch merge into one blob whose area means nothing, so they are
+    excluded by shape: a lone ball nearly fills its bounding box (pi/4 = 0.785)
+    and is square, a cluster is neither.
     """
-    dist = cv2.distanceTransform(not_felt, cv2.DIST_L2, 5)
-    peaks = (dist >= peak_frac * r_typ).astype(np.uint8)
-    count, _, _, centroids = cv2.connectedComponentsWithStats(peaks)
-
-    balls = []
-    H, W = not_felt.shape[:2]
+    count, _, stats, _ = cv2.connectedComponentsWithStats(not_felt)
+    radii = []
     for i in range(1, count):                     # 0 is the background
-        x, y = (int(round(v)) for v in centroids[i])
-        if not (0 <= x < W and 0 <= y < H):
+        area = stats[i, cv2.CC_STAT_AREA]
+        w, h = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
+        if area < 200 or not w or not h:
             continue
-        r = int(round(dist[y, x])) or int(r_typ)  # distance at the centre ~ radius
-        balls.append((x, y, r))
-    return balls
+        if not 0.70 < area / float(w * h) < 0.90:
+            continue
+        if not 0.8 < w / float(h) < 1.25:
+            continue
+        radii.append(math.sqrt(area / math.pi))
+    return int(round(np.median(radii))) if radii else default
 
 
-def hough_alt(img, table_mask, not_felt, min_r, max_r,
-              param1=300, param2=0.5, dp=1.0):
-    """Circle detection with HOUGH_GRADIENT_ALT, gated to real table content.
+def drop_oversize_blobs(not_felt, r, max_balls=MAX_BALLS):
+    """Erase anything too big to be a pile of balls.
 
-    ALT is the accurate variant of the Hough circle transform: param2 is a
-    0-1 "perfectness" ratio rather than an accumulator count. It finds balls
-    that are touching, where the blob split stage sees a rack as one lump.
+    A player's arm over the table is not felt either, and a ball-sized disc
+    fits it perfectly at hundreds of positions - one frame of this footage
+    produced 58 "balls", forty of them along a forearm. No local test tells the
+    two apart: a forearm has edges, colour variation and a rounded outline, and
+    so does a ball wedged in a rack.
 
-    Two gates keep its extra sensitivity from inventing balls:
-      - the centre must sit a ball-radius inside the table (drops pockets,
-        rails and cushion shadows)
-      - the disc must mostly cover non-felt pixels (drops felt glare)
+    What does tell them apart is total size. Only sixteen balls exist, so one
+    connected region can hold at most sixteen ball areas. The arm measured
+    forty-nine; the entire fifteen-ball rack, fifteen. A ball hidden under an
+    arm is lost for those frames, which costs nothing - it was not visible.
     """
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    H, W = gray.shape
-    inner = cv2.erode(table_mask, np.ones((min_r, min_r), np.uint8))
-
-    circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT_ALT, dp=dp,
-                               minDist=int(min_r * 1.5), param1=param1,
-                               param2=param2, minRadius=min_r, maxRadius=max_r)
-    if circles is None:
-        return []
-
-    balls = []
-    for x, y, r in np.round(circles[0]).astype(int):
-        if not (0 <= x < W and 0 <= y < H) or not inner[y, x]:
-            continue
-        disc = not_felt[max(0, y - r):y + r, max(0, x - r):x + r]
-        if disc.size == 0 or (disc > 0).mean() < 0.30:
-            continue
-        balls.append((int(x), int(y), int(r)))
-    return balls
-
-
-def merge_detections(primary, extra, tol):
-    """Keep every primary detection, add extras that are not already covered."""
-    out = list(primary)
-    for x, y, r in extra:
-        if all((x - px) ** 2 + (y - py) ** 2 > tol * tol for px, py, _ in out):
-            out.append((x, y, r))
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(not_felt)
+    limit = max_balls * math.pi * r * r
+    out = not_felt.copy()
+    for i in range(1, count):
+        if stats[i, cv2.CC_STAT_AREA] > limit:
+            out[labels == i] = 0
     return out
 
 
-def detect_felt(img, min_r=15, max_r=30, felt_tol=(18, 130, 90), shrink=18,
-                shape="hybrid", alt_param2=0.5):
+def find_balls(not_felt, r, coverage=BALL_COVERAGE, separation=BALL_SEPARATION):
+    """One centre per ball, by asking where a ball-sized disc fits the mask.
+
+    Correlating a filled disc against the mask scores every pixel by the
+    fraction of that disc which is non-felt - how well a ball centred there
+    explains what was seen. Taking the peaks greedily and suppressing a
+    neighbourhood after each separates touching balls: the score stays high
+    across a whole cluster, but only one peak per ball survives suppression.
+    """
+    mask = drop_oversize_blobs(not_felt, r).astype(np.float32) / 255.0
+    disc = np.zeros((2 * r + 1, 2 * r + 1), np.float32)
+    cv2.circle(disc, (r, r), r, 1.0, -1)
+    score = cv2.filter2D(mask, -1, disc / disc.sum())
+
+    balls = []
+    while True:
+        _, best, _, (x, y) = cv2.minMaxLoc(score)
+        if best < coverage:
+            break
+        balls.append((int(x), int(y), int(r)))
+        cv2.circle(score, (x, y), int(separation * r), 0.0, -1)
+    return balls
+
+
+def not_felt_mask(img, table, felt_low=FELT_LOW, felt_high=FELT_HIGH):
+    """Everything on the table that is not cloth - the ball candidates.
+
+    `table` is passed in rather than measured here because table_region() is
+    the most expensive step in the pipeline and a fixed camera only needs it
+    once.
+    """
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    not_felt = cv2.bitwise_and(cv2.bitwise_not(felt_mask(hsv, felt_low, felt_high)),
+                               table)
+    not_felt = cv2.morphologyEx(not_felt, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    return fill_holes(not_felt)
+
+
+def detect_felt(img, ball_r=None, felt_low=FELT_LOW, felt_high=FELT_HIGH,
+                shrink=18):
     """Felt-inversion detection for a top-down table.
 
     Rather than describing every ball colour, measure the one colour that is
     constant - the felt - and treat whatever sits on the table and is NOT felt
-    as a ball candidate. The shape stage then splits touching balls, which a
-    blob-only approach would merge into one lump.
+    as a ball candidate. One ball-sized disc is then fitted everywhere it can
+    go, which is what separates balls that touch.
 
     Returns (balls, not_felt, table_mask) so callers can inspect the masks.
     """
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     H, W = img.shape[:2]
-
-    felt = sample_felt(hsv, H, W)
-    tol = np.array(felt_tol)
-    lo = np.clip(felt - tol, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
-    hi = np.clip(felt + tol, [0, 0, 0], [179, 255, 255]).astype(np.uint8)
-    felt_mask = cv2.inRange(hsv, lo, hi)
-
-    table_mask = table_region(felt_mask, H, W, shrink)
-    not_felt = cv2.bitwise_and(cv2.bitwise_not(felt_mask), table_mask)
-    not_felt = cv2.morphologyEx(not_felt, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
-    not_felt = fill_holes(not_felt)
-
-    # Shape stage. The two methods fail in opposite situations, so by default
-    # run both: the blob split is precise on separated balls, ALT is the one
-    # that can break a tight rack apart.
-    dt_balls = []
-    alt_balls = []
-    if shape in ("hybrid", "dt"):
-        dt_balls = split_blobs(not_felt, r_typ=(min_r + max_r) / 2.0)
-        dt_balls = [(x, y, int(min(max(r, min_r), max_r))) for x, y, r in dt_balls]
-    if shape in ("hybrid", "alt"):
-        alt_balls = hough_alt(img, table_mask, not_felt, min_r, max_r,
-                              param2=alt_param2)
-
-    if shape == "dt":
-        balls = dt_balls
-    elif shape == "alt":
-        balls = alt_balls
-    else:
-        # ALT first: it separates a cluster into individual balls, so its
-        # centres are the ones worth keeping where the two disagree.
-        balls = merge_detections(alt_balls, dt_balls, tol=min_r)
-
+    table_mask = table_region(felt_mask(hsv, felt_low, felt_high), H, W, shrink)
+    not_felt = not_felt_mask(img, table_mask, felt_low, felt_high)
+    if ball_r is None:
+        ball_r = estimate_ball_radius(not_felt)
+    balls = find_balls(not_felt, ball_r)
     balls.sort(key=lambda b: (b[1], b[0]))
     return balls, not_felt, table_mask
 
@@ -262,15 +303,13 @@ def main():
                     help="HSV lower bound for color mode (default: orange)")
     ap.add_argument("--hsv-high", nargs=3, type=int, default=[20, 255, 255],
                     help="HSV upper bound for color mode")
-    ap.add_argument("--min-r", type=int, default=15, help="min ball radius, px (felt mode)")
-    ap.add_argument("--max-r", type=int, default=30, help="max ball radius, px (felt mode)")
-    ap.add_argument("--felt-tol", nargs=3, type=int, default=[18, 130, 90],
-                    help="how far from the felt color still counts as felt (H S V)")
-    ap.add_argument("--shape", choices=["hybrid", "alt", "dt"], default="hybrid",
-                    help="felt-mode shape stage: HOUGH_GRADIENT_ALT, the blob "
-                         "split, or both (default)")
-    ap.add_argument("--alt-param2", type=float, default=0.5,
-                    help="ALT circle 'perfectness', 0-1; lower finds more (default 0.5)")
+    ap.add_argument("--ball-r", type=int, default=None,
+                    help="ball radius in px (felt mode); measured from the "
+                         "image when not given")
+    ap.add_argument("--felt-low", nargs=3, type=int, default=list(FELT_LOW),
+                    help=f"felt HSV lower bound, from tuner.py (default {FELT_LOW})")
+    ap.add_argument("--felt-high", nargs=3, type=int, default=list(FELT_HIGH),
+                    help=f"felt HSV upper bound, from tuner.py (default {FELT_HIGH})")
     ap.add_argument("--debug", action="store_true",
                     help="also save the felt/table masks next to the output")
     ap.add_argument("--out", default=DEFAULT_OUTPUT,
@@ -303,8 +342,7 @@ def main():
 
     if args.mode == "felt":
         balls, not_felt, table_mask = detect_felt(
-            img, args.min_r, args.max_r, args.felt_tol,
-            shape=args.shape, alt_param2=args.alt_param2)
+            img, args.ball_r, args.felt_low, args.felt_high)
         if args.debug:
             base = os.path.splitext(out_path)[0]
             cv2.imwrite(f"{base}_notfelt.png", not_felt)
