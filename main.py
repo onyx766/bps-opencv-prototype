@@ -561,8 +561,8 @@ def main():
 
             for pot in session.update(tracked, labels, idx):
                 print(f"  POT   frame {idx}  {pot.cls.upper()} in {pot.pocket} "
-                      f"(track {pot.track}, {pot.dist:.0f} px from centre)",
-                      flush=True)
+                      f"(track {pot.track}, {pot.dist:.0f} px out, "
+                      f"closing {pot.closed:.0f} px/frame)", flush=True)
             # Anything the rules decided this frame - a foul, a group, a win.
             while logged < len(session.game.log):
                 print(f"  GAME  frame {idx}  {session.game.log[logged]['text']}",
