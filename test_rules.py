@@ -11,6 +11,7 @@ rows drive GameSession's own methods with hand-built positions.
 Run:  python -m unittest test_rules -v
 """
 
+import collections
 import importlib
 import json
 import os
@@ -990,6 +991,158 @@ class Detection(unittest.TestCase):
         cv2.line(nf, (176, 120), (370, 120), 255, 12)
         _labels, found = server.find_intrusions(nf, self.BR, table)
         self.assertEqual(len(found), 3)
+
+
+class Pots(unittest.TestCase):
+    """Not a CSV row: which balls a settled shot actually lost (5:32 in game.mp4)."""
+
+    def settled(self, before=9, after=8):
+        s = session()
+        s.before = before
+        s.recent.extend([(True, after)] * logic.SETTLE_FRAMES)
+        return s
+
+    def test_a_ball_still_sitting_where_it_was_is_not_credited(self):
+        s = self.settled()
+        s.window.extend([(True, [(400, 30), (700, 300)])] * logic.SETTLE_FRAMES)
+        still = logic.Pot(100, 1, STRIPE, "TM", 30.0, 0.0, 226, False, 400, 30)
+        went = logic.Pot(101, 2, SOLID, "BR", 40.0, 20.0, 50, True, 960, 470)
+        s.candidates = [still, went]
+        self.assertEqual([p.track for p in s._settle_up(101)], [2])
+
+    def test_a_fast_ball_lost_short_of_the_pocket_only_fills_a_gap(self):
+        d = logic.PotDetector(POCKETS, R)
+        d.update([(1, 60, 50, R)], {}, 1)          # 78 px out: past the mouth
+        for f in range(2, 2 + logic.POT_CONFIRM):
+            out = d.update([], {}, f)
+        self.assertEqual((out, [p.track for p in d.far]), ([], [1]))
+
+        s = self.settled()
+        s.far_claims = [logic.Pot(100, 4, STRIPE, "TL", 81.0, 0.0, 1, True, 60, 55)]
+        self.assertEqual([p.track for p in s._settle_up(101)], [4])
+
+        # An established track dying out there lost its id, not its ball: the
+        # cue ball at 7:30 was never potted however far the count was out.
+        old = self.settled()
+        old.far_claims = [logic.Pot(100, 6, CUE, "BR", 117.0, -32.0, 248, False,
+                                    900, 400)]
+        self.assertEqual(old._settle_up(101), [])
+
+        # ... and a young one is never the cue ball while the cue is in view.
+        blip = self.settled()
+        blip.frame = 101
+        blip.last_seen[CUE] = 100
+        blip.far_claims = [logic.Pot(100, 7, CUE, "TM", 119.0, 0.0, 1, False,
+                                     560, 110)]
+        self.assertEqual(blip._settle_up(101), [])
+        s.candidates = [logic.Pot(100, 5, SOLID, "BR", 40.0, 20.0, 50, False,
+                                  960, 470)]
+        self.assertEqual([p.track for p in s._settle_up(101)], [5])
+
+    def test_a_ball_gone_from_the_census_is_scored_without_a_claim(self):
+        # 4:29: a solid went down, its track died 232 px from any pocket, and
+        # nothing was credited. The classifier still shows it gone.
+        s = self.settled(before=6, after=5)
+        s.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
+                                               CUE: 1})
+        s.census.extend([(True, collections.Counter({STRIPE: 3, EIGHT: 1,
+                                                     CUE: 1}))] * logic.SETTLE_FRAMES)
+        credited = s._settle_up(101)
+        self.assertEqual([(p.cls, p.pocket, p.track) for p in credited],
+                         [(SOLID, None, -1)])
+        self.assertLess(s.pots.confidence(credited[0]), rules.CONTACT_CONFIDENCE)
+
+        # A class that comes back in any frame of the window was mislabelled
+        # for a moment, not potted - even with the count a ball down.
+        flicker = self.settled(before=6, after=5)
+        flicker.before_census = collections.Counter({STRIPE: 3, SOLID: 1,
+                                                     EIGHT: 1, CUE: 1})
+        flicker.census.extend([(True, collections.Counter({STRIPE: 2, SOLID: 2,
+                                                           EIGHT: 1, CUE: 1}))]
+                              * (logic.SETTLE_FRAMES - 1))
+        flicker.census.append((True, collections.Counter({STRIPE: 3, SOLID: 1,
+                                                          EIGHT: 1, CUE: 1})))
+        self.assertEqual(flicker._settle_up(101), [])
+
+        # Two balls gone at once, or two classes short, is arithmetic nobody
+        # should score from - and neither is a settling held for a hand.
+        two = self.settled(before=6, after=4)
+        two.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
+                                                 CUE: 1})
+        two.census.extend([(True, collections.Counter({STRIPE: 2, EIGHT: 1,
+                                                       CUE: 1}))] * logic.SETTLE_FRAMES)
+        self.assertEqual(two._settle_up(101), [])
+
+        held = self.settled(before=6, after=5)
+        held.last_hold = 9
+        held.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
+                                                  CUE: 1})
+        held.census.extend([(True, collections.Counter({STRIPE: 3, EIGHT: 1,
+                                                        CUE: 1}))] * logic.SETTLE_FRAMES)
+        self.assertEqual(held._settle_up(101), [])
+
+        # No drop in the count, no credit, whatever the labels flicker to.
+        same = self.settled(before=6, after=6)
+        same.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
+                                                  CUE: 1})
+        same.census.extend([(True, collections.Counter({STRIPE: 4, EIGHT: 1,
+                                                        CUE: 1}))] * logic.SETTLE_FRAMES)
+        self.assertEqual(same._settle_up(101), [])
+
+    def test_W07_needs_the_eight_to_have_been_there_all_along(self):
+        # A rack must not end because one frame once called something the 8.
+        s = self.settled(before=6, after=5)
+        s.eight_at_rest = True
+        s.frame, s.last_seen[EIGHT] = 200, 10
+        s.before_census = collections.Counter({STRIPE: 3, SOLID: 2, CUE: 1})
+        s.census.extend([(True, collections.Counter({STRIPE: 3, SOLID: 1,
+                                                     CUE: 1}))] * logic.SETTLE_FRAMES)
+        self.assertEqual(s._off_table([])[0], [])
+
+        # Seen steadily before and gone now, it really did leave the table.
+        off = self.settled(before=6, after=5)
+        off.eight_at_rest = True
+        off.frame, off.last_seen[EIGHT] = 200, 10
+        off.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
+                                                 CUE: 1})
+        off.census.extend([(True, collections.Counter({STRIPE: 3, SOLID: 1,
+                                                       CUE: 1}))] * logic.SETTLE_FRAMES)
+        self.assertEqual(off._off_table([])[0], [EIGHT])
+
+    def test_a_table_being_cleared_is_not_a_shot(self):
+        # The end of every rack in this footage: the players pick the balls up.
+        s = session()
+        g = s.game
+        on_solids(g)
+        s.settled_balls = 10
+        s.resting = [(100, 100), (200, 200)]
+        s.recent.extend([(True, 3)] * logic.SETTLE_FRAMES)
+        s.window.extend([(True, [(100, 100)])] * logic.SETTLE_FRAMES)
+        s.candidates = [logic.Pot(100, 1, EIGHT, "BR", 72.0, 0.0, 30, False,
+                                  980, 480)]
+        turn, shots = g.turn, g.shot
+        self.assertEqual(s._settle(101), [])
+        self.assertEqual((g.over, g.turn, g.shot), (False, turn, shots))
+        self.assertEqual((s.resting, s.settled_balls), (None, None))
+
+    def test_cue_ball_potted_under_a_young_tracks_label_is_the_cue(self):
+        s = self.settled()
+        s.frame, s.cue_at_rest = 200, True
+        s.last_seen[CUE] = 150                     # unseen since it ran off
+        young = logic.Pot(198, 3, STRIPE, "BR", 90.0, 44.0, 3, True, 950, 480)
+        s.candidates = [young]
+        self.assertEqual([p.cls for p in s._settle_up(200)], [CUE])
+
+        seen = self.settled()
+        seen.frame, seen.cue_at_rest = 200, True
+        seen.last_seen[CUE] = 198                  # the cue ball is still there
+        seen.candidates = [young]
+        self.assertEqual([p.cls for p in seen._settle_up(200)], [STRIPE])
+
+        # And the rules then call it what it was: a scratch, the stripe counts.
+        g = on_solids(eight())
+        shot(g, pots=[SOLID, CUE])
+        self.assertEqual((g.fouls, g.turn, g.potted[SOLID]), ([1, 0], 1, 2))
 
 
 if __name__ == "__main__":

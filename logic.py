@@ -141,6 +141,14 @@ MOVED_R = 1.5
 #: and 11 balls, and every episode that was not a shot moved 0 or 1.
 SHOT_MOVED = 2
 
+#: Most balls one shot can take off the table. A break pots two or three at the
+#: outside; a table that loses more than this in one settling is being CLEARED,
+#: which is what happens at the end of every rack in this footage - the players
+#: pick the balls up and rack them. Measured: the biggest real drop in this
+#: match is two, and the clear-up at the end of rack 2 dropped seven in one
+#: settling, which was judged a shot and ended the rack on a stale claim.
+MAX_SHOT_POTS = 4
+
 #: ... except while the rack is still standing, when the break has to scatter
 #: it. A tight rack is where detected centres are least trustworthy, so it is
 #: also where the most movement should be demanded.
@@ -624,6 +632,10 @@ class GameSession:
         # both directions and is worth nothing to either the count or positions.
         self.recent = deque(maxlen=settle)     # ball count over the last frames
         self.window = deque(maxlen=settle)     # ... and where they were
+        self.census = deque(maxlen=settle)     # ... and what they were
+        self.settled_census = None   # the classes on the table at the last settling
+        self.before_census = None    # ... as they stood before the shot being judged
+        self.last_hold = 0           # frames the shot being judged waited to clear
         self.resting = None        # the table as it stood at the last settling
         # The ball count is only trustworthy at ONE moment: the instant a shot
         # settles. The balls have stopped and the player is still standing back
@@ -901,6 +913,7 @@ class GameSession:
         clear = not self.busy
         self.recent.append((clear, len(tracked)))
         self.window.append((clear, [(x, y) for _t, x, y, _r in tracked]))
+        self.census.append((clear, Counter(lb.cls for lb in (labels or {}).values())))
         positions = self.window[-1][1]
         self._observe(tracked, labels, frame)
 
@@ -1410,6 +1423,23 @@ class GameSession:
         counts = [n for ok, n in self.recent if ok]
         return counts if counts else [n for _ok, n in self.recent]
 
+    def _clear_census(self, agg=_median):
+        """... and how many balls of each class the settled table shows.
+
+        Per class rather than per ball, because that is what survives a track
+        dying: the ball is gone from the count AND from its class, whatever
+        happened to the id that carried it.
+
+        `agg` is how the frames of the window are reconciled - the middle
+        reading by default, and `max` when the question is whether a class is
+        REALLY missing rather than merely mislabelled for a frame.
+        """
+        seen = [c for ok, c in self.census if ok] or [c for _ok, c in self.census]
+        if not seen:
+            return Counter()
+        return Counter({cls: agg([c.get(cls, 0) for c in seen])
+                        for cls in set().union(*(set(c) for c in seen))})
+
     def _frame_at_rest(self):
         """The frame of the settled window whose count is the most typical one.
 
@@ -1429,6 +1459,7 @@ class GameSession:
         who is standing in the shot while it is taken and inflates it.
         """
         self.resting = self._frame_at_rest()
+        self.settled_census = self._clear_census()
         if self.settled_balls is None:
             self.settled_balls = len(self.resting)
         recent = self.frame - self.shots.settle
@@ -1501,6 +1532,21 @@ class GameSession:
             self.episodes.append({"frame": frame, "held": held,
                                   "verdict": "not judged - the table never cleared"})
             return []
+        # More balls gone than any shot can pot: the players are clearing the
+        # table, not playing it. Judging that scores a rack-ending call on
+        # whatever claim happens to be lying about - at the end of rack 2 seven
+        # balls went into their hands at once and the 8 was called potted.
+        if (self.settled_balls or 0) - _median(self._clear_counts()) > MAX_SHOT_POTS:
+            self.episodes.append({"frame": frame, "held": held,
+                                  "was": self.settled_balls,
+                                  "now": _median(self._clear_counts()),
+                                  "verdict": "not judged - the table was cleared"})
+            self._refuse(frame, self.candidates, "the table was cleared")
+            self.candidates, self.far_claims = [], []
+            self.resting, self.settled_balls, self.settled_census = None, None, None
+            self.game.note("note", "TABLE CLEARED - NOT A SHOT", rule="M-09",
+                           quiet=True)
+            return []
         moved = [p for p in (self.resting or []) if not self._seen_now(p)]
         racked = (not self.game.struck) and (self.settled_balls or 0) >= FULL_RACK
         need = SHOT_MOVED_BREAK if racked else SHOT_MOVED
@@ -1535,6 +1581,8 @@ class GameSession:
             return []
 
         self.before = self.settled_balls
+        self.before_census = Counter(self.settled_census or {})
+        self.last_hold = held
         self.settled_at = frame          # M-02 counts from here - shots only
         shooter = self.game.turn
         self.game.shot_started(frame)
@@ -1659,10 +1707,20 @@ class GameSession:
         if unexplained < 1:
             return [], 1.0
         since = self.frame - self.shots.settle
+        # One sighting is not enough to say a ball WAS there, and one missed
+        # frame is not enough to say it is gone: the 8 at the end of rack 1 had
+        # been potted two shots earlier, and a single flickering label was all
+        # it took to end the rack against the wrong player. The census is the
+        # steadier witness - consistently on the table before, consistently
+        # absent now.
+        before_cls = Counter(self.before_census or {})
+        now_cls = self._clear_census(max)
         gone = []
         for cls, was_there in ((EIGHT, self.eight_at_rest),
                                (CUE, self.cue_at_rest)):
             if not was_there or any(p.cls == cls for p in credited):
+                continue
+            if before_cls.get(cls, 0) < 1 or now_cls.get(cls, 0) > 0:
                 continue
             if self.last_seen.get(cls, -1) < since:
                 gone.append(cls)
@@ -1692,12 +1750,117 @@ class GameSession:
         # The count says how many balls went down; the ranking says which claims
         # get them. Weak claims are not thrown away here - a hard-struck ball
         # leaves weak evidence behind, because it outran the tracker.
-        ranked = sorted(self.candidates, key=self.pots.rank)
+        #
+        # A claim for a ball that is still sitting where it was last seen is not
+        # a pot, however well it ranks. A ball resting by the top-middle pocket
+        # blinks out under passing hands all through this footage, and at 5:32
+        # that blink took the credit for a stripe that went down elsewhere.
+        still = [c for c in self.candidates if self._still_there(c)]
+        self._refuse(frame, still, "ball still sitting where it was")
+        ranked = sorted([c for c in self.candidates if c not in still],
+                        key=self.pots.rank)
         credited, refused = ranked[:dropped], ranked[dropped:]
+        # The table lost more than the near claims explain: a ball reborn as a
+        # new track mid-flight vanished short of the mouth (POT_FAR_MOUTH). Only
+        # a YOUNG track can be that - an established one that dies out there
+        # lost its id, not its ball. At 7:30 and 8:12 in this footage exactly
+        # that, filling a count that was a ball out, called two scratches on a
+        # cue ball that never left the cloth.
+        if len(credited) < dropped:
+            # Nor is a fallback ever the cue ball while the cue ball is in
+            # plain view: at 7:30 a one-frame cue track 119 px from a pocket
+            # called a scratch with the cue sitting on the cloth.
+            cue_here = self.last_seen.get(CUE, -1) >= self.frame - self.shots.settle
+            far = sorted([c for c in self.far_claims if c.age < POT_MIN_AGE
+                          and not (c.cls == CUE and cue_here)
+                          and not self._still_there(c)],
+                         key=self.pots.rank)
+            credited += far[:dropped - len(credited)]
+        if len(credited) < dropped:
+            credited += self._by_class(frame, dropped - len(credited), credited)
         self._refuse(frame, refused,
                      f"table still holds {after} balls (was {before})")
+        credited = self._cue_under_another_label(credited)
         self.all_pots.extend(credited)
         return credited
+
+    def _by_class(self, frame, missing, credited):
+        """A ball the table has lost that no vanishing track can explain.
+
+        At 4:29 in this footage a solid went down and nothing claimed it: the
+        track carrying it died 232 px from the nearest pocket, far outside any
+        mouth, because a hard-struck ball at 4.9 fps is reborn as a new id
+        mid-flight and then lost again. Thirteen settlings over the match lost a
+        ball with nothing credited, and every one of them is a pot that never
+        reached the score.
+
+        What the camera still has is the CLASSIFIER: three stripes, a solid, the
+        8 and the cue before the shot; three stripes, the 8 and the cue after.
+        The solid is gone, whoever was carrying its id. That is enough to score
+        it, and not enough to say where it went - so the pocket is left unknown
+        and the claim carries a young track's confidence, which M-14 marks with
+        a dot.
+
+        The evidence has to be clean, because this is the weakest claim the
+        system makes - there is no vanishing to point at, only arithmetic. So
+        the shot must have been judged the moment it settled, on a table with
+        nothing leaning over it, with exactly ONE ball unaccounted for and
+        exactly ONE class short to explain it. Anything else - a settling held
+        while hands cleared, two balls gone at once, two classes disagreeing -
+        is a count nobody should score from: at 4:17 a settling held nine
+        frames for a hand credited a stripe that undid a correct call.
+
+        The 8 is tried last, so an ordinary ball explains a drop before the
+        rack-ending one does. It is in the list because the alternative is
+        worse: at the end of rack 1 the 8 went down on a shot nothing claimed,
+        the count said so, and the miss surfaced two shots later as W-07's
+        "knocked off the table" - a rack ended against the wrong player, on an
+        inference, long after the shot that really decided it.
+        """
+        # The most generous reading of what is still on the table: a class only
+        # counts as missing when it is missing in EVERY clear frame of the
+        # window. A stripe read as a solid for one frame looks exactly like a
+        # stripe that went down, and over this match that flicker credited
+        # eleven stripes, two of them balls the rack could not even hold.
+        if missing != 1 or self.last_hold or not all(ok for ok, _p in self.window):
+            return []
+        now = self._clear_census(max)
+        before = Counter(self.before_census or {})
+        for p in credited:            # already explained by a real claim
+            before[p.cls] -= 1
+        short = [cls for cls in (STRIPE, SOLID, CUE, EIGHT)
+                 if before.get(cls, 0) - now.get(cls, 0) > 0]
+        if len(short) != 1:
+            return []
+        return [Pot(frame, -1, short[0], None, 0.0, 0.0, 0, False, None, None)]
+
+    def _still_there(self, claim):
+        """Was this claim a ball at rest that the settled table still shows?"""
+        return (claim.x is not None and claim.closed < self.pots.approach
+                and self._seen_now((claim.x, claim.y)))
+
+    def _cue_under_another_label(self, credited):
+        """F-01: the cue ball went down, but its track said it was something else.
+
+        A cue ball running the length of the table is broken into new tracks at
+        this frame rate, and a new track's first few votes are taken off a
+        blurred white ball - at 5:32 one was voted STRIPE three frames old and
+        potted as a stripe, hiding a scratch and scoring the shooter a ball.
+
+        The evidence that settles it is the same one _off_table uses: the cue
+        ball was on the table when this shot began and no track has carried its
+        label since the balls came to rest. If so, and a credited claim came from
+        a track too young for its label to mean anything, that claim was the cue.
+        """
+        if not self.cue_at_rest or any(p.cls == CUE for p in credited):
+            return credited
+        if self.last_seen.get(CUE, -1) >= self.frame - self.shots.settle:
+            return credited
+        young = [p for p in credited if p.age < POT_MIN_AGE]
+        if not young:
+            return credited
+        cue = max(young, key=lambda p: (p.frame, p.closed))
+        return [p._replace(cls=CUE) if p is cue else p for p in credited]
 
     def _refuse(self, frame, claims, why):
         for p in claims:

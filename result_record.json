@@ -313,12 +313,12 @@
       "clock": "05:38",
       "rack": 1,
       "shot": 17,
-      "type": "pot",
-      "text": "PLAYER 1 CONTINUES",
-      "rule": null,
+      "type": "foul",
+      "text": "FOUL - SCRATCH - BALL IN HAND",
+      "rule": "F-01",
       "confidence": null,
       "actor": "system",
-      "player": null,
+      "player": 0,
       "clip": {
         "frame": 1667,
         "clock": "05:38"
@@ -343,27 +343,6 @@
     },
     {
       "seq": 21,
-      "frame": 1769,
-      "clock": "05:58",
-      "rack": 1,
-      "shot": 17,
-      "type": "note",
-      "text": "BALL MOVED BY HAND - PUT IT BACK",
-      "rule": "M-07",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1769,
-        "clock": "05:58"
-      },
-      "at": [
-        713,
-        891
-      ]
-    },
-    {
-      "seq": 22,
       "frame": 1770,
       "clock": "05:59",
       "rack": 1,
@@ -380,13 +359,30 @@
       }
     },
     {
+      "seq": 22,
+      "frame": 1829,
+      "clock": "06:10",
+      "rack": 1,
+      "shot": 18,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.21,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 1829,
+        "clock": "06:10"
+      }
+    },
+    {
       "seq": 23,
       "frame": 1829,
       "clock": "06:10",
       "rack": 1,
       "shot": 18,
       "type": "turn",
-      "text": "MISS - PLAYER 2 TO SHOOT",
+      "text": "MISS - PLAYER 1 TO SHOOT",
       "rule": "M-01",
       "confidence": null,
       "actor": "system",
@@ -407,7 +403,7 @@
       "rule": "F-01",
       "confidence": null,
       "actor": "system",
-      "player": 1,
+      "player": 0,
       "clip": {
         "frame": 2008,
         "clock": "06:47"
@@ -487,25 +483,8 @@
       "clock": "07:29",
       "rack": 1,
       "shot": 20,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.21,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2218,
-        "clock": "07:29"
-      }
-    },
-    {
-      "seq": 30,
-      "frame": 2218,
-      "clock": "07:29",
-      "rack": 1,
-      "shot": 20,
       "type": "turn",
-      "text": "MISS - PLAYER 2 TO SHOOT",
+      "text": "MISS - PLAYER 1 TO SHOOT",
       "rule": "M-01",
       "confidence": null,
       "actor": "system",
@@ -516,7 +495,7 @@
       }
     },
     {
-      "seq": 31,
+      "seq": 30,
       "frame": 2243,
       "clock": "07:34",
       "rack": 1,
@@ -533,7 +512,7 @@
       }
     },
     {
-      "seq": 32,
+      "seq": 31,
       "frame": 2251,
       "clock": "07:36",
       "rack": 1,
@@ -550,156 +529,20 @@
       }
     },
     {
-      "seq": 33,
+      "seq": 32,
       "frame": 2427,
       "clock": "08:12",
       "rack": 1,
       "shot": 21,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.3,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2427,
-        "clock": "08:12"
-      }
-    },
-    {
-      "seq": 34,
-      "frame": 2427,
-      "clock": "08:12",
-      "rack": 1,
-      "shot": 21,
-      "type": "turn",
-      "text": "OPPONENT'S BALL POTTED - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
+      "type": "pot",
+      "text": "PLAYER 1 CONTINUES",
+      "rule": null,
       "confidence": null,
       "actor": "system",
       "player": null,
       "clip": {
         "frame": 2427,
         "clock": "08:12"
-      }
-    },
-    {
-      "seq": 35,
-      "frame": 2686,
-      "clock": "09:04",
-      "rack": 1,
-      "shot": 22,
-      "type": "turn",
-      "text": "MISS - PLAYER 2 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2686,
-        "clock": "09:04"
-      }
-    },
-    {
-      "seq": 36,
-      "frame": 2808,
-      "clock": "09:29",
-      "rack": 1,
-      "shot": 23,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.3,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2808,
-        "clock": "09:29"
-      }
-    },
-    {
-      "seq": 37,
-      "frame": 2808,
-      "clock": "09:29",
-      "rack": 1,
-      "shot": 23,
-      "type": "turn",
-      "text": "MISS - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2808,
-        "clock": "09:29"
-      }
-    },
-    {
-      "seq": 38,
-      "frame": 2929,
-      "clock": "09:54",
-      "rack": 1,
-      "shot": 24,
-      "type": "foul",
-      "text": "FOUL - NO BALL HIT - BALL IN HAND",
-      "rule": "F-05",
-      "confidence": null,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 2929,
-        "clock": "09:54"
-      }
-    },
-    {
-      "seq": 39,
-      "frame": 3009,
-      "clock": "10:10",
-      "rack": 1,
-      "shot": 25,
-      "type": "win",
-      "text": "PLAYER 1 WINS - 8 KNOCKED OFF THE TABLE",
-      "rule": "W-07",
-      "confidence": 0.6,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 3009,
-        "clock": "10:10"
-      }
-    },
-    {
-      "seq": 40,
-      "frame": 3703,
-      "clock": "12:31",
-      "rack": 2,
-      "shot": 25,
-      "type": "rack",
-      "text": "RACK 2 - PLAYER 1 BREAKS",
-      "rule": "M-09",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 3703,
-        "clock": "12:31"
-      }
-    },
-    {
-      "seq": 41,
-      "frame": 3811,
-      "clock": "12:53",
-      "rack": 2,
-      "shot": 26,
-      "type": "turn",
-      "text": "DRY BREAK - PLAYER 2 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 3811,
-        "clock": "12:53"
       }
     }
   ],
@@ -739,11 +582,11 @@
       }
     },
     {
-      "seq": 29,
-      "frame": 2218,
-      "clock": "07:29",
+      "seq": 22,
+      "frame": 1829,
+      "clock": "06:10",
       "rack": 1,
-      "shot": 20,
+      "shot": 18,
       "type": "review",
       "text": "REVIEW - FIRST CONTACT UNCERTAIN",
       "rule": "F-09",
@@ -751,59 +594,8 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2218,
-        "clock": "07:29"
-      }
-    },
-    {
-      "seq": 33,
-      "frame": 2427,
-      "clock": "08:12",
-      "rack": 1,
-      "shot": 21,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.3,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2427,
-        "clock": "08:12"
-      }
-    },
-    {
-      "seq": 36,
-      "frame": 2808,
-      "clock": "09:29",
-      "rack": 1,
-      "shot": 23,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.3,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2808,
-        "clock": "09:29"
-      }
-    },
-    {
-      "seq": 39,
-      "frame": 3009,
-      "clock": "10:10",
-      "rack": 1,
-      "shot": 25,
-      "type": "win",
-      "text": "PLAYER 1 WINS - 8 KNOCKED OFF THE TABLE",
-      "rule": "W-07",
-      "confidence": 0.6,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 3009,
-        "clock": "10:10"
+        "frame": 1829,
+        "clock": "06:10"
       }
     }
   ],
@@ -821,20 +613,20 @@
       "Player"
     ],
     "groups": [
-      "OPEN",
-      "OPEN"
+      "STRIPES",
+      "SOLIDS"
     ],
     "score": [
-      0,
-      0
+      4,
+      5
     ],
     "racks": [
-      1,
+      0,
       0
     ],
     "race": null,
     "fouls": [
-      0,
+      3,
       0
     ],
     "defences": [
@@ -845,29 +637,29 @@
       0,
       0
     ],
-    "shots": 26,
-    "innings": 1,
+    "shots": 21,
+    "innings": 8,
     "analytics": [
       {
-        "shots": 13,
-        "TSR": 0.231,
-        "CRR": 0.923,
+        "shots": 10,
+        "TSR": 0.4,
+        "CRR": 0.7,
         "SDR": 0.0
       },
       {
-        "shots": 13,
-        "TSR": 0.308,
-        "CRR": 0.846,
+        "shots": 11,
+        "TSR": 0.364,
+        "CRR": 1.0,
         "SDR": 0.0
       }
     ],
     "winner": null,
-    "status": "DRY BREAK - PLAYER 2 TO SHOOT",
-    "pots": 13,
+    "status": "PLAYER 1 CONTINUES",
+    "pots": 12,
     "phantoms": 0,
-    "replaced": 1,
-    "reviews": 1,
-    "unexplained": 4,
-    "busy_frames": 1621
+    "replaced": 0,
+    "reviews": 0,
+    "unexplained": 2,
+    "busy_frames": 730
   }
 }
