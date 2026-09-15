@@ -85,6 +85,14 @@ NineBallGame = games.NineBallGame
 #: pocket, so nothing at rest gets a wider mouth, which is where phantoms live.
 POCKET_MOUTH = 5.0
 
+#: ... and how far out a vanishing is still worth REMEMBERING, in ball radii. A
+#: ball struck hard enough is reborn as a new track mid-flight, and a track one
+#: frame old has no previous position to earn the speed allowance above: at 5:32
+#: in this footage a stripe was last seen 163 px (8 radii) short of the top-left
+#: pocket it went into, and was never claimed. Claims out here are only a
+#: fallback - used when the table lost more balls than the near claims explain.
+POT_FAR_MOUTH = 10.0
+
 #: Frames a track must stay missing before its pot is believed. A ball behind a
 #: player's arm comes back within a frame or two.
 POT_CONFIRM = 3
@@ -157,7 +165,15 @@ RACK_TOUCHING_NINE = 7
 
 #: ... and it has to STAY racked. A triangle sits waiting while someone chalks
 #: up and lines up the break.
-RACK_FRAMES = 6
+#:
+#: This is also why the rack test cannot wait for a CLEAR table the way the ball
+#: count does. Measured at the second rack in this footage: the triangle read as
+#: racked for 130 consecutive frames and not one of them was free of a hand or a
+#: cue - people stand at the table the whole time they rack up and line up the
+#: break. Requiring a clear frame means that rack is never seen, and the next
+#: game is scored into the finished one. Persistence does the job instead: a
+#: triangle still being built is not thirteen balls in contact for 12 frames.
+RACK_FRAMES = 12
 
 #: Frames of stillness that end a shot. Must be longer than POT_CONFIRM, or a
 #: ball potted late in the shot would be confirmed after the shot it belonged
@@ -184,6 +200,14 @@ WIN_SECONDS = 4.0
 #: cushion has its centre about two radii inside that line rather than one.
 RAIL_BAND_R = 2.0
 
+#: Frames per second below which "no ball reached a rail" is not believed.
+#: Seeing a ball IN the cushion band is proof of contact at any frame rate.
+#: Not seeing one is not proof of anything at 4.9 fps: a ball can come off a
+#: cushion between two frames and never be photographed near it. F-04 is an
+#: auto-called foul, so its absence has to be established, and below this rate
+#: it cannot be - the answer is "could not tell", and F-09's principle applies.
+RAIL_MIN_FPS = 15.0
+
 #: The head string sits a quarter of the table's length from the head rail.
 #: That is the table's own geometry rather than a tuned number, and F-02 needs
 #: it drawn as well as tested.
@@ -201,7 +225,10 @@ WEDGE_REACH_R = 3.0
 #: `busy` is the one field the vision layer contributes directly: a hand or a
 #: cue was over the table while this track was missing, so its disappearance
 #: has an innocent explanation that has nothing to do with a pocket.
-Pot = namedtuple("Pot", "frame track cls pocket dist closed age busy")
+#: `x`, `y` are where the track was last seen - so a claim for a ball that is in
+#: fact still sitting there can be told from one that went down.
+Pot = namedtuple("Pot", "frame track cls pocket dist closed age busy x y",
+                 defaults=(None, None))
 
 #: A prompt the HUD must show and a player must answer. `options` are the taps
 #: that resolve it; `rule` cites the row that demanded it.
@@ -212,6 +239,16 @@ def _median(values):
     """Middle value - the ball count's defence against a one-frame miscount."""
     ordered = sorted(values)
     return ordered[len(ordered) // 2] if ordered else 0
+
+
+def _line_distance(x, y, a, b):
+    """Distance from (x, y) to the line through points a and b."""
+    (ax, ay), (bx, by) = a, b
+    dx, dy = bx - ax, by - ay
+    length = (dx * dx + dy * dy) ** 0.5
+    if not length:
+        return ((x - ax) ** 2 + (y - ay) ** 2) ** 0.5
+    return abs(dy * (x - ax) - dx * (y - ay)) / length
 
 
 class PotDetector:
@@ -242,6 +279,8 @@ class PotDetector:
         self.min_age = min_age
         self.mass = mass
         self.approach = approach * max(1, ball_r)
+        self.far_reach = POT_FAR_MOUTH * max(1, ball_r)
+        self.far = []           # fallback claims beyond the mouth, see POT_FAR_MOUTH
         self.last = {}          # track id -> (x, y, cls)
         self.prev = {}          # ... and where it was the frame before that
         self.age = Counter()    # track id -> frames seen
@@ -297,7 +336,8 @@ class PotDetector:
                       if was else 0.0)
             # One frame's worth of travel on top of the resting mouth - see
             # POCKET_MOUTH. Only a ball closing on the pocket earns it.
-            if dist > self.reach + max(0.0, closed):
+            near = dist <= self.reach + max(0.0, closed)
+            if not near and dist > self.far_reach:
                 continue                      # vanished in open table: occluded
             # The one thing still refused outright: a crowd of tracks dying
             # together is a person, and no ranking should have to sort that out.
@@ -307,8 +347,9 @@ class PotDetector:
                     "pocket": pocket.name, "age": age,
                     "why": f"{len(gone)} tracks vanished together"})
                 continue
-            pots.append(Pot(frame, tid, cls, pocket.name, round(dist, 1),
-                            round(closed, 1), age, hand))
+            (pots if near else self.far).append(
+                Pot(frame, tid, cls, pocket.name, round(dist, 1),
+                    round(closed, 1), age, hand, int(x), int(y)))
         return pots
 
     def rank(self, pot):
@@ -473,6 +514,15 @@ class TableGeometry:
         self.long_axis = "x" if (self.x1 - self.x0) >= (self.y1 - self.y0) else "y"
         self.head_at_low = True     # provisional until a rack is seen
         self.head_known = False
+        # The rails as the four lines through the corner pockets, in order round
+        # the table - not the bounding box. A camera is never square to the
+        # cloth: on this footage the right-hand corners sit 52 px apart in x, so
+        # a box puts the right rail that far out at one end, and a ball touching
+        # the real cushion there would read as never having reached it.
+        by = {p.name: (p.x, p.y) for p in corners}
+        self.rails = ([(by["TL"], by["TR"]), (by["TR"], by["BR"]),
+                       (by["BR"], by["BL"]), (by["BL"], by["TL"])]
+                      if len(corners) == 4 else [])
 
     @property
     def length(self):
@@ -528,6 +578,8 @@ class TableGeometry:
         if not self.ok:
             return False
         band = RAIL_BAND_R * self.ball_r
+        if self.rails:
+            return any(_line_distance(x, y, a, b) <= band for a, b in self.rails)
         return (x - self.x0 <= band or self.x1 - x <= band
                 or y - self.y0 <= band or self.y1 - y <= band)
 
@@ -543,18 +595,27 @@ class GameSession:
                  players=("Player 1", "Player 2"), mouth=POCKET_MOUTH,
                  settle=SETTLE_FRAMES, discipline=games.EIGHT_BALL,
                  mode=games.CASUAL, levels=(None, None), defence_marking=False,
-                 pocket_marking=None, first_rack_confirmed=True):
+                 pocket_marking=None, first_rack_confirmed=True,
+                 sample_fps=None, fmt="open", break_assigns=True,
+                 innings_rule=games.SCORESHEET_INNINGS, lag_winner=0):
         self.pots = PotDetector(pockets, ball_r, mouth=mouth)
         self.shots = ShotSegmenter(ball_r, settle=settle)
         self.table = TableGeometry(pockets, ball_r)
         self.game = make_game(discipline, players=players, mode=mode,
                               levels=levels, defence_marking=defence_marking,
-                              pocket_marking=pocket_marking, fps=fps)
+                              pocket_marking=pocket_marking, fps=fps, fmt=fmt,
+                              break_assigns=break_assigns,
+                              innings_rule=innings_rule, lag_winner=lag_winner)
         self.discipline = discipline
         self.fps = fps if fps and fps > 0 else 25.0
+        # `fps` is the video's own rate and drives every clock; `sample_fps` is
+        # how often frames actually ARRIVE (fps / stride), which is what decides
+        # how much can be seen between two of them.
+        self.sample_fps = sample_fps if sample_fps and sample_fps > 0 else self.fps
         self.ball_r = max(1, ball_r)
         self.moved_r = MOVED_R * self.ball_r
         self.candidates = []       # pots claimed since this episode started
+        self.far_claims = []       # ... and vanishings too far out to claim, as a fallback
         # Both windows hold (clear, ...) pairs: `clear` is False on a frame
         # with a hand or a cue over the table, and every reading taken from
         # these windows prefers the frames where it is True. A hand does not
@@ -600,6 +661,16 @@ class GameSession:
         self.shot_confidence = None    # M-14: the number behind the last call
         self.phantoms = 0
         self.replaced = 0
+        self.last_facts = None     # the last judged shot, for re-judging it
+        self.label_conf = {}       # track id -> identity confidence (M-06)
+        self.last_seen = {}        # class -> last frame a track carried it
+        self.cue_pos = None        # where the cue ball is right now (F-02)
+        self.rail_tracks = set()   # object balls that reached a rail (M-10)
+        self.wedge_frames = 0      # W-11: how long the pair has sat there
+        self.hanging = []          # M-02: still-table claims awaiting a count
+        self.wedge_dismissed = None
+        self.eight_at_rest = False # W-07: was the 8 on the table last settle?
+        self.cue_at_rest = False
 
     # ---- what the HUD reads ------------------------------------------------
 
@@ -636,7 +707,9 @@ class GameSession:
             return None
         p = Prompt(kind, rule, text, list(options), dict(data))
         self.prompts.append(p)
-        self.game.note("prompt", text, rule=rule)
+        # Quiet: the question has its own panel, and the status line keeps the
+        # verdict it is asking about.
+        self.game.note("prompt", text, rule=rule, quiet=True)
         return p
 
     def answer(self, kind, choice=None):
@@ -655,13 +728,15 @@ class GameSession:
             game.confirm_groups(prompt.data.get("shooter", game.turn), choice)
         elif prompt.kind == "wedged":
             if choice == "pocketed":
-                # W-11: deemed pocketed. The players drop both in and the system
-                # scores them - unless doing so would end the game, which the
-                # rules layer works out for itself from the classes.
-                self._credit_manual(prompt.data.get("classes", []))
+                self._credit_wedged(prompt.data.get("classes", []))
             else:
+                self.wedge_dismissed = prompt.data.get("pocket")
                 game.note("note", "WEDGED PAIR - PLAY CONTINUES", rule="W-11",
                           actor="player")
+        elif prompt.kind == "illegal_break":
+            game.resolve_illegal_break(choice)
+            if choice == "re-rack":
+                self.resting, self.settled_balls = None, None
         elif prompt.kind == "rack":
             self.first_rack_confirmed = True
             game.note("rack", "RACK CONFIRMED", rule="M-09", actor="player")
@@ -672,13 +747,52 @@ class GameSession:
             game.note("note", f"{prompt.kind.upper()} RESOLVED",
                       rule=prompt.rule, actor="player")
 
-    def _credit_manual(self, classes):
-        """Pots a player confirmed rather than the camera (W-11)."""
+    def _credit_wedged(self, classes):
+        """W-11: deemed pocketed, and scored - unless that would end the game.
+
+        The wedged pair belongs to the shot that left it there, so that shot is
+        re-judged with the two balls added. If the re-judge ENDS the rack, the
+        rule's exception applies: judge the shot again as it originally was,
+        drop the balls without the rack-ending condition, and play resumes.
+        """
+        game = self.game
         if not classes:
+            game.note("note", "WEDGED PAIR DROPPED - BALLS NOT IDENTIFIED",
+                      rule="W-11", actor="player")
             return
-        self.game.shot_started(self.frame)
-        self.game.shot_ended(games.facts(pots=list(classes),
-                                         moved=len(classes)), self.frame)
+        original, was_over = self.last_facts, game.over
+        if self._rejudge(add=classes, why="WEDGED PAIR DROPPED"):
+            if game.over and not was_over:
+                self.last_facts = original
+                self._rejudge(why="WEDGED PAIR WOULD END THE RACK")
+                game.drop_without_ending(classes)
+            return
+        game.drop_without_ending(classes)
+
+    def _rejudge(self, add=(), remove=(), why="SHOT RE-JUDGED"):
+        """Walk the last shot back and judge it again with different pots.
+
+        M-02, M-04 and W-11 all change what went down on a shot that has
+        ALREADY been scored - a hanging ball dropped late, a ball rattled back
+        out, a wedged pair dropped in by hand - and all of them have to land on
+        the shot that caused them, with the shooter who played it, not on
+        whoever happens to be at the table now. The snapshot M-03 took before
+        that shot is exactly the state to re-judge from.
+
+        Returns False when there is no shot to walk back (the next stroke has
+        begun, or the rack is locked), and the caller does something that does
+        not touch the verdict instead.
+        """
+        game = self.game
+        if self.last_facts is None or not game.record.can_undo:
+            return False
+        if not game.undo(by="system", why=why):
+            return False
+        f = games.merge(self.last_facts, add=add, remove=remove)
+        game.shot_started(self.settled_at or self.frame)
+        game.shot_ended(f, self.frame)
+        self.last_facts = f
+        return True
 
     # ---- the HUD's whole command surface -----------------------------------
 
@@ -711,6 +825,15 @@ class GameSession:
         else:
             out.append(("reopen", "REOPEN", True))
         out.append(("foul", "CALL FOUL", game.record.foul_window_open(game.shot)))
+        # Manual 16d: only while an unmarked 8 is still standing as a win.
+        if getattr(game, "unmarked_claim", None) is not None:
+            out.append(("call_loss", "CALL LOSS: UNMARKED 8", True))
+        # Manual 3.14: frozen balls are declared, never detected into a rule.
+        out.append(("frozen", "DECLARE FROZEN", not game.over))
+        # Manual 3.4 note: push-outs only in Masters, only after the break.
+        if (self.discipline == games.NINE_BALL and game.fmt == "masters"
+                and game.shot <= 1 and not game.over):
+            out.append(("push_out", "PUSH-OUT", True))
         out.append(("stalemate", "STALEMATE", not game.over))
         out.append(("review", "REVIEW", True))
         return out
@@ -739,6 +862,14 @@ class GameSession:
             return game.stalemate()
         if name == "call_pocket":
             return game.call_pocket(kw.get("pocket"))
+        if name == "call_loss":
+            return bool(getattr(game, "call_unmarked_loss", lambda: False)())
+        if name == "frozen":
+            return game.declare_frozen(kw.get("ball", "BALL"))
+        if name == "swap_groups":
+            return bool(getattr(game, "swap_groups", lambda: False)())
+        if name == "push_out":
+            return bool(getattr(game, "push_out", lambda: False)())
         if name == "review":
             # M-13: BPS does not overrule. The button pulls the footage and says
             # so in the log; the players resolve it themselves with the back
@@ -771,6 +902,7 @@ class GameSession:
         self.recent.append((clear, len(tracked)))
         self.window.append((clear, [(x, y) for _t, x, y, _r in tracked]))
         positions = self.window[-1][1]
+        self._observe(tracked, labels, frame)
 
         # The per-frame observations that are only meaningful on a still, clear
         # table. All three are marks and wait states - none of them calls a foul.
@@ -783,13 +915,20 @@ class GameSession:
         # next is about to be broken, whatever the rules engine thought was
         # happening. Checked per frame, before anything else: a rack that goes
         # unnoticed scores a whole new game into a rack that is already empty.
-        # Not while a hand is in the way, though - racking is DONE by hand, and
-        # a half-built triangle under the arm still building it is the one
-        # arrangement most likely to be miscounted.
-        if self.shots.moving or self.busy or not self._racked(positions):
+        # Hands are NOT excluded here, unlike everywhere a count is taken:
+        # racking is done by hand and watched over by both players, so a rack is
+        # never seen on a clear table. RACK_FRAMES carries that weight instead.
+        if self.shots.moving or not self._racked(positions):
             self.racked_for = 0
         else:
             self.racked_for += 1
+            if self.racked_for >= RACK_FRAMES and not self.table.head_known:
+                # The opening rack is where F-02's head string is learned from.
+                self.table.learn_foot(positions)
+            if (self.racked_for >= RACK_FRAMES and not self.game.struck
+                    and not self.first_rack_confirmed):
+                self.ask("rack", "M-09", "NEW RACK DETECTED - CONFIRM",
+                         ["yes"], balls=len(positions))
             if self.racked_for >= RACK_FRAMES and self.game.struck:
                 if self._new_rack(frame, positions):
                     return []
@@ -803,24 +942,36 @@ class GameSession:
             credited = self._settle(self.pending)
         if event == "start":
             self.candidates = []
+            self.far_claims = []
             self.rail_contact = False
-            # M-04's failsafe runs "until the next shot begins", and this is it.
-            self.last_credited = []
+            self.rail_tracks = set()
+            self.wedge_dismissed = None
             self.replace_at = None
-            self.settled_at = None
+            # A still-table claim never confirmed before play resumed is dropped:
+            # the table it would be counted against no longer exists.
+            self.ignored.extend(self.hanging)
+            self.hanging = []
+            # NOT last_credited or settled_at: motion is not a shot until the
+            # settle says so, and a player walking past the table must neither
+            # close M-04's failsafe nor restart M-02's clock. Both are replaced
+            # when the next SHOT is judged, in _settle.
 
         if self.shots.moving:
             self._watch_rails(tracked)
 
         claims = self.pots.update(tracked, labels, frame, busy=self.busy)
+        far, self.pots.far = self.pots.far, []
+        if self.shots.moving or event == "end":
+            self.far_claims.extend(far)
         if claims and (self.shots.moving or event == "end"):
             self.candidates.extend(claims)
         elif claims:
             # A ball cannot go down while nothing is moving - unless it was
             # hanging in the jaw, which is exactly what M-02 is about. The
             # hanging test decides whether this is a late pot worth scoring or a
-            # ball that has to be put back.
-            self._hanging(claims)
+            # ball that has to be put back - once the table is clear enough to
+            # count, not on the frame the claim arrives.
+            self._hold_hanging(claims)
 
         # The settling is where every verdict is taken, and it is taken by
         # counting balls - so it is exactly the thing that must not happen with
@@ -840,10 +991,16 @@ class GameSession:
                                        "why": "gave up waiting for a clear table"})
                 credited = self._settle(self.pending)
 
+        if self.hanging and not self.shots.moving and self.pending is None:
+            self._confirm_hanging()
+
         # M-04 and W-10, on the same detector and the same threshold, which is
         # the client's own observation: a ball that is back on the table was
-        # never potted.
-        if not self.shots.moving and clear and self.last_credited:
+        # never potted. Only on a table that has been clear for a whole settle
+        # window - a player straightening up uncovers balls, and those are not
+        # balls coming back out of a pocket.
+        if (not self.shots.moving and self.since_clear >= SETTLE_FRAMES
+                and self.last_credited):
             self._reconcile_phantoms(positions, frame)
 
         # Before anything has happened, the racked table standing still is the
@@ -854,6 +1011,42 @@ class GameSession:
         if self.resting is None and not self.shots.moving and not self.busy:
             self._rest()
         return credited
+
+    # ---- per-frame bookkeeping ---------------------------------------------
+
+    #: How a vote's state maps onto M-14's confidence scale. `voted` means the
+    #: identity vote has settled over several frames; `pending` means it has
+    #: not, and a game-deciding call should not rest on it.
+    LABEL_CONFIDENCE = {"voted": 0.9, "pending": 0.5}
+
+    def _observe(self, tracked, labels, frame):
+        """What each ball is, how sure, and where the cue ball sits."""
+        self.cue_pos = None
+        for tid, x, y, _r in tracked:
+            label = (labels or {}).get(tid)
+            if label is None:
+                continue
+            self.label_conf[tid] = self.LABEL_CONFIDENCE.get(label.confidence,
+                                                             0.0)
+            self.last_seen[label.cls] = frame
+            if label.cls == CUE:
+                self.cue_pos = (x, y)
+
+    @property
+    def placement(self):
+        """F-02: is a restricted ball in hand currently placed legally?
+
+        True / False while a head-string ball in hand is owed and the cue ball
+        can be seen; None whenever there is nothing to check - no restriction
+        owed, no cue ball in view, or no rack seen yet to say which end is the
+        head. None draws the zone without a verdict: it is only enforced once
+        it is KNOWN.
+        """
+        if self.game.ball_in_hand != games.BEHIND_HEAD_STRING:
+            return None
+        if self.cue_pos is None or not self.table.head_known:
+            return None
+        return bool(self.table.behind_head_string(*self.cue_pos))
 
     # ---- F-04 and F-08: the cushions ---------------------------------------
 
@@ -870,8 +1063,14 @@ class GameSession:
         if not self.table.ok:
             self.rail_contact = None
             return
-        if any(self.table.on_rail(x, y) for _t, x, y, _r in tracked):
-            self.rail_contact = True
+        # Only balls that are part of the shot. A ball already frozen against a
+        # cushion sits in the band all game, and counting it would make every
+        # shot a legal one.
+        for tid, x, y, _r in tracked:
+            if tid in self.shots.movers and self.table.on_rail(x, y):
+                self.rail_contact = True
+                if self.shots.movers[tid] != CUE:
+                    self.rail_tracks.add(tid)
 
     def _frozen(self, tracked, labels):
         """F-08. Mark balls against a cushion and hand them to the players.
@@ -923,23 +1122,87 @@ class GameSession:
         system says what it thinks it sees and the players decide, which is the
         client's instruction and the only honest option.
         """
-        if not self.has_pockets or self.game.over:
+        if not self.has_pockets or self.game.over or not self.game.struck:
+            self.wedge_frames = 0
             return
-        reach = WEDGE_REACH_R * self.ball_r
+        reach = (WEDGE_REACH_R * self.ball_r) ** 2
+        touch = (TOUCHING_R * self.ball_r) ** 2
         for pocket in self.pots.pockets:
-            near = [(tid, x, y) for tid, x, y, _r in tracked
-                    if (x - pocket.x) ** 2 + (y - pocket.y) ** 2 <= reach ** 2]
-            if len(near) < 2:
+            if pocket.name == self.wedge_dismissed:
                 continue
-            classes = [(labels or {}).get(t).cls for t, _x, _y in near
+            near = [(tid, x, y) for tid, x, y, _r in tracked
+                    if (x - pocket.x) ** 2 + (y - pocket.y) ** 2 <= reach]
+            # Two balls in the jaw TOUCHING each other. Two balls merely resting
+            # near the same corner is ordinary play and asks nothing.
+            pairs = [(a, b) for i, a in enumerate(near) for b in near[i + 1:]
+                     if (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2 <= touch]
+            if not pairs:
+                continue
+            # ... and staying there, so a ball rolling past a resting one on its
+            # way into the pocket is not a question.
+            self.wedge_frames += 1
+            if self.wedge_frames < RACK_FRAMES:
+                return
+            (ta, _xa, _ya), (tb, _xb, _yb) = pairs[0]
+            classes = [(labels or {})[t].cls for t in (ta, tb)
                        if (labels or {}).get(t) is not None]
             self.ask("wedged", "W-11",
-                     f"TWO BALLS IN THE {pocket.name} JAW - DROP THEM IN?",
+                     f"TWO BALLS WEDGED IN {pocket.name} - DROP THEM IN?",
                      ["pocketed", "play-on"], classes=classes,
                      pocket=pocket.name)
             return
+        self.wedge_frames = 0
 
     # ---- M-02: the hanging ball --------------------------------------------
+
+    def _hold_hanging(self, claims):
+        """Collect claims made on a still table, to be judged once it is clear.
+
+        Two filters first, both about what a hanging ball IS. It sat in the jaw
+        for a while, so its track is established; and nothing was leaning over
+        the table while it disappeared. A player standing over a pocket fails
+        both - and on this footage that is most of what these claims are: an
+        earlier version without these filters re-judged one shot four times in
+        ninety frames while somebody leant over the bottom-middle pocket.
+        """
+        if self.settled_at is None:
+            self.ignored.extend(claims)
+            return
+        for c in claims:
+            (self.hanging if c.age >= POT_MIN_AGE and not c.busy
+             else self.ignored).append(c)
+
+    def _confirm_hanging(self):
+        """Believe a still-table pot only when the CLEAR table agrees it is gone.
+
+        Waits for a full settle window with nothing over the cloth, then counts.
+        No drop means nothing went down; a drop credits at most that many
+        claims, best-ranked first - the same bargain _settle_up makes.
+        """
+        if self.since_clear < SETTLE_FRAMES:
+            return
+        lost = (self.settled_balls or 0) - _median(self._clear_counts())
+        held, self.hanging = sorted(self.hanging, key=self.pots.rank), []
+        if lost < 1:
+            self.ignored.extend(held)
+            return
+        self.ignored.extend(held[lost:])
+        self._hanging(held[:lost])
+
+    def _last_spot(self, claim):
+        """Where a ball that went down was sitting: the resting ball nearest the
+        pocket it went into. The detector forgets a track once it is gone, but
+        the last settled table still has it."""
+        pocket = next((p for p in self.pots.pockets if p.name == claim.pocket),
+                      None)
+        if pocket is None or not self.resting:
+            return None
+        spot = min(self.resting, key=lambda q: (q[0] - pocket.x) ** 2
+                                               + (q[1] - pocket.y) ** 2)
+        if ((spot[0] - pocket.x) ** 2 + (spot[1] - pocket.y) ** 2
+                > (POCKET_MOUTH * self.ball_r) ** 2):
+            return None
+        return int(spot[0]), int(spot[1])
 
     def _hanging(self, claims):
         """M-02. A ball falls on a still table: was it hanging, or just sitting?
@@ -952,25 +1215,48 @@ class GameSession:
         itself is NOT scored - it has to be replaced as closely as possible to
         where it sat, and M-07's mechanism is what shows the players where.
         """
-        if self.settled_at is None:
+        # The same gate every other pot passes: a claim is only as good as the
+        # settled count. Most claims on a still table are a player standing
+        # over a pocket, and those leave the count exactly where it was - which
+        # is why the detector ignored them before M-02 existed, and still does.
+        now = _median(self._clear_counts())
+        if (self.settled_at is None or self.busy or self.settled_balls is None
+                or now >= self.settled_balls):
             self.ignored.extend(claims)
             return
-        elapsed = (self.frame - self.settled_at) / self.fps
+        # ... and the ball has to have been SITTING at that pocket when the
+        # table settled, and be gone from there now. A count that dips is not
+        # enough on its own: a ball resting near the top-middle pocket blinks
+        # out of detection all through this footage, and at 4:41 the dip was
+        # scored as a hanging ball dropping - re-judging the shot, handing the
+        # turn back and adding a point for a ball still on the cloth.
+        spots = [self._last_spot(c) for c in claims]
+        if any(s is None or self._seen_now(s) for s in spots):
+            self.ignored.extend(claims)
+            return
+        # Timed from when the ball DROPPED, not from when the count confirmed
+        # it - the wait for a clear table must not push a hanging ball over.
+        elapsed = (min(c.frame for c in claims) - self.settled_at) / self.fps
         if elapsed <= rules.HANGING_SECONDS:
             # Inside the window: a hanging ball that dropped. It belongs to the
-            # shot that just settled, so it is credited there.
-            self.all_pots.extend(claims)
-            self.last_credited.extend(claims)
-            self.game.shot_ended(games.facts(pots=[c.cls for c in claims],
-                                             moved=len(claims)), self.frame)
-            self.game.note("pot", "HANGING BALL DROPPED - SCORED", rule="M-02",
-                           confidence=min(self.pots.confidence(c)
-                                          for c in claims))
+            # shot that just settled, and to the player who played it, so that
+            # shot is re-judged with the ball added rather than a new shot being
+            # invented for whoever is at the table now.
+            if self._rejudge(add=[c.cls for c in claims],
+                             why="HANGING BALL DROPPED"):
+                self.all_pots.extend(claims)
+                self.last_credited.extend(claims)
+                self.settled_balls = max(0, (self.settled_balls or 0)
+                                         - len(claims))
+                self.game.note("pot", "HANGING BALL DROPPED - SCORED",
+                               rule="M-02", confidence=min(
+                                   self.pots.confidence(c) for c in claims))
+            else:
+                self.ignored.extend(claims)
             return
         # Outside it: not scored, and the HUD has to say where it goes back.
         self.ignored.extend(claims)
-        spot = self.pots.last.get(claims[0].track)
-        self.replace_at = spot[:2] if spot else None
+        self.replace_at = self._last_spot(claims[0])
         self.game.note("note", f"BALL FELL AFTER {elapsed:.0f}s - NOT SCORED",
                        rule="M-02")
         self.ask("replace", "M-02", "REPLACE THE BALL WHERE IT SAT",
@@ -1017,10 +1303,10 @@ class GameSession:
                 self.all_pots.remove(pot)
             self.phantoms += 1
             self.settled_balls = (self.settled_balls or 0) + 1
-            # The pot changed the score, so taking it back means walking the
-            # rules state back too - which is what M-03's snapshots are for.
-            if self.game.record.can_undo:
-                self.game.undo()
+            # The pot changed the verdict, so taking it back means judging the
+            # shot again without it - same shooter, same everything else.
+            self._rejudge(remove=[pot.cls],
+                          why=f"{pot.cls.upper()} NOT POTTED")
             if not silent:
                 self.game.note("note", f"{pot.cls.upper()} CAME BACK OUT OF "
                                        f"{pot.pocket} - NOT POTTED", rule="W-10")
@@ -1047,22 +1333,31 @@ class GameSession:
 
     # ---- M-06: the groups --------------------------------------------------
 
-    def _confirm_groups(self, shooter, credited):
+    def _confirm_groups(self, shooter, credited, was_open):
         """M-06. Ask once, with two thumbnails, and never guess silently.
 
         Colour accuracy is around 80% today and one confirmation tap beats a
-        wrong game. The prompt only goes up when the table is OPEN and the
-        assignment is about to be made off a shaky label - once groups are
-        locked the same uncertainty is just a label, not a game-deciding call.
+        wrong game. The prompt only goes up when the table WAS open and this
+        shot assigned groups off a shaky label - once groups are locked the
+        same uncertainty is just a label, not a game-deciding call.
+
+        By the time this runs the rules have already made the assignment. That
+        is fine as long as it is visibly provisional until the tap, which is
+        what `groups_confirmed` tells the HUD.
         """
-        if self.discipline != games.EIGHT_BALL or not self.game.open_table:
+        if self.discipline != games.EIGHT_BALL or not was_open:
             return False
+        if self.game.open_table:
+            return False                 # nothing was assigned: nothing to ask
         objects = [p for p in credited if p.cls in (STRIPE, SOLID)]
         if not objects:
             return False
-        confidence = min(self.pots.confidence(p) for p in objects)
+        # Colour confidence, not pot confidence: the question M-06 asks is
+        # whether we know WHAT went down, which is the identity vote's business.
+        confidence = min(self.label_conf.get(p.track, 0.0) for p in objects)
         if confidence >= rules.CONTACT_CONFIDENCE:
             return False
+        self.game.groups_confirmed = False
         self.ask("groups", "M-06", "CONFIRM GROUPS", [STRIPE, SOLID],
                  shooter=shooter, confidence=confidence,
                  at=[self.pots.last.get(p.track, (0, 0, ""))[:2]
@@ -1136,6 +1431,9 @@ class GameSession:
         self.resting = self._frame_at_rest()
         if self.settled_balls is None:
             self.settled_balls = len(self.resting)
+        recent = self.frame - self.shots.settle
+        self.eight_at_rest = self.last_seen.get(EIGHT, -1) >= recent
+        self.cue_at_rest = self.last_seen.get(CUE, -1) >= recent
 
     def _racked(self, positions):
         """Is the table a fresh triangle rather than a game in progress? (M-09)
@@ -1191,6 +1489,18 @@ class GameSession:
         """
         held = self.held
         self.pending, self.held = None, 0
+        # Overtaken while held, without one clear frame to judge from: every
+        # reading below would be taken through the hand, and a ball under a hand
+        # reads as a ball that MOVED or LEFT. Measured at 3:04 in this footage:
+        # a player aiming with a bridge hand touching the cue ball had it read
+        # as gone, scored as a scratch, and remembered without it - so the real
+        # pot on the next shot was refused. With no pot claimed there is nothing
+        # a verdict could credit, so there is no verdict, and the table the next
+        # episode is judged against stays the last one that was actually seen.
+        if not any(ok for ok, _pos in self.window) and not self.candidates:
+            self.episodes.append({"frame": frame, "held": held,
+                                  "verdict": "not judged - the table never cleared"})
+            return []
         moved = [p for p in (self.resting or []) if not self._seen_now(p)]
         racked = (not self.game.struck) and (self.settled_balls or 0) >= FULL_RACK
         need = SHOT_MOVED_BREAK if racked else SHOT_MOVED
@@ -1207,7 +1517,6 @@ class GameSession:
                   "now": _median(self._clear_counts()), "held": held,
                   "claims": [p._asdict() for p in self.candidates]}
         self.episodes.append(record)
-        self.settled_at = frame          # M-02 counts from here
 
         if len(moved) < need:
             record["verdict"] = f"not a shot - only {len(moved)} ball(s) moved"
@@ -1216,23 +1525,32 @@ class GameSession:
             # Never a foul - the client is explicit that enforcing it would make
             # casual play miserable - and the useful response is to show where
             # the ball goes back.
-            if len(moved) == 1 and not self.candidates and self.game.struck:
+            # Ball in hand is excluded: placing it is exactly one ball moving,
+            # and it is the one hand-moved ball that is supposed to happen.
+            if (len(moved) == 1 and not self.candidates and self.game.struck
+                    and not self.game.ball_in_hand and not self.game.over):
                 self._replaced(moved, frame)
             self.candidates = []
             self._rest()
             return []
 
         self.before = self.settled_balls
+        self.settled_at = frame          # M-02 counts from here - shots only
         shooter = self.game.turn
         self.game.shot_started(frame)
         credited = self._settle_up(frame)
         record["credited"] = [p._asdict() for p in credited]
 
-        struck_before = self.game.struck
-        self.game.shot_ended(self._facts(credited, moved), frame)
+        was_open = getattr(self.game, "open_table", False)
+        self.last_facts = self._facts(credited, moved)
+        self.game.shot_ended(self.last_facts, frame)
         self.last_credited = list(credited)
         self.candidates = []
-        self._confirm_groups(shooter, credited)
+        self._confirm_groups(shooter, credited, was_open)
+        if getattr(self.game, "illegal_break", False):
+            self.ask("illegal_break", "M-10",
+                     f"ILLEGAL BREAK - {self.game.name(self.game.turn)}: "
+                     f"PLAY ON OR RE-RACK?", ["play-on", "re-rack"])
 
         record["verdict"] = self.game.status
         if self.game.over and self.won_at is None:
@@ -1241,10 +1559,12 @@ class GameSession:
         # A potted object ball stays down; a potted cue ball is fished out and
         # put back, so the table will hold one more than it does at this moment.
         self.settled_balls = (_median(self._clear_counts()) +
-                              sum(1 for p in credited if p.cls == CUE))
+                              sum(1 for p in credited if p.cls == CUE) +
+                              self.last_facts.off_table.count(CUE))
         # A re-rack (the 8 on the break) puts fifteen balls back, so nothing
-        # counted before it means anything afterwards.
-        if struck_before and not self.game.struck:
+        # counted before it means anything afterwards. Every judged shot leaves
+        # the rack struck, so a rack that is not struck now was re-racked.
+        if not self.game.struck:
             self.resting, self.settled_balls = None, None
         return credited
 
@@ -1297,15 +1617,56 @@ class GameSession:
 
         self.shot_confidence = (min(self.pots.confidence(p) for p in credited)
                                 if credited else None)
+        eight = next((p for p in credited if p.cls == EIGHT), None)
+        off_table, off_conf = self._off_table(credited)
+        # Rail contact SEEN is proof at any frame rate; rail contact NOT seen is
+        # only proof at a frame rate that could have seen it (RAIL_MIN_FPS).
+        slow = self.sample_fps < RAIL_MIN_FPS
+        rail = None if (self.rail_contact is False and slow) else self.rail_contact
+        rail_balls = len(self.rail_tracks) if self.table.ok else None
+        if slow and rail_balls is not None and rail_balls < games.BREAK_RAIL_BALLS:
+            rail_balls = None
         return games.facts(
             pots=[p.cls for p in credited],
-            off_table=[],
-            rail_contact=self.rail_contact,
+            off_table=off_table,
+            rail_contact=rail,
             hit_object=hit_object,
             first_contact=first_cls,
             contact_conf=round(confidence, 2),
             moved=len(moved),
+            rail_balls=rail_balls,
+            eight_pocket=eight.pocket if eight else None,
+            off_conf=off_conf,
         )
+
+    #: How sure an off-the-table inference is. Deliberately under M-14's bar,
+    #: so every such call carries a visible dot.
+    OFF_TABLE_CONFIDENCE = 0.6
+
+    def _off_table(self, credited):
+        """W-07 and F-01's "off the table": a ball that left without a pocket.
+
+        Inferred, never observed - a camera over the cloth does not see the
+        floor. Three things all have to hold before the 8 or the cue ball is
+        said to have left the table: it was on the table when the last shot
+        settled, no track has carried its label since this shot ended, and the
+        settled count dropped by more than the pots that were credited. If any
+        one of them fails the ball is merely unlabelled, and nothing is said.
+        """
+        after = _median(self._clear_counts())
+        before = self.before if self.before is not None else after
+        unexplained = (before - after) - len(credited)
+        if unexplained < 1:
+            return [], 1.0
+        since = self.frame - self.shots.settle
+        gone = []
+        for cls, was_there in ((EIGHT, self.eight_at_rest),
+                               (CUE, self.cue_at_rest)):
+            if not was_there or any(p.cls == cls for p in credited):
+                continue
+            if self.last_seen.get(cls, -1) < since:
+                gone.append(cls)
+        return gone[:unexplained], self.OFF_TABLE_CONFIDENCE
 
     def _settle_up(self, frame):
         """Decide which of this shot's claims were real, by counting the table.
@@ -1400,8 +1761,9 @@ class GameSession:
             return f"TIME OUT - {who}"
         if self.waiting_for_cue:
             return "WAITING FOR THE CUE BALL"
-        if self.prompt is not None:
-            return self.prompt.text
+        # A waiting prompt is NOT the status: it has its own panel on the HUD,
+        # and in a rendered video nobody can tap it, so letting it take over
+        # the status line would hide every verdict after it.
         if self.game.over:
             return self.game.status
         if self.shots.moving:

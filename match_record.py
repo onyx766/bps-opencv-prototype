@@ -47,7 +47,8 @@ import time
 #: rack starting, a break being observed - are not undoable on their own: they
 #: are the boundaries the undo is measured against.
 UNDOABLE = {"pot", "foul", "turn", "assign", "win", "loss", "defence",
-            "timeout", "points", "dead", "manual"}
+            "timeout", "points", "dead", "manual", "review", "impossible",
+            "match", "break", "rerack"}
 
 #: Kinds that mean a correction was made and not yet settled, which is what
 #: raises SCORE UNCONFIRMED at the end of a rack.
@@ -162,22 +163,39 @@ class MatchRecord:
             return None
         return self._snapshots[-1][2] or "LAST SHOT"
 
-    def undo(self, frame, clock, rack, shot):
+    def undo(self, frame, clock, rack, shot, by="player", why=None):
         """Walk back one shot. Returns the state to restore, or None.
 
         Available to EITHER player with no PIN, by client decision: the people
         at the table are the ones who know what happened, and making them prove
         it turns a ten-second fix into an argument.
+
+        Nothing is deleted. The undone events stay in the log marked REVERTED,
+        and the revert is itself an event - M-03 says every revert is written to
+        the log, and a log that forgets what it used to say is not a source of
+        truth for a dispute about exactly that.
+
+        `by="system"` is the silent re-judge M-02 and M-04 need when a late
+        ball changes a shot that has already been scored. It is logged the same
+        way but does not raise SCORE UNCONFIRMED, because nobody disputed it.
         """
         if not self.can_undo:
             return None
         count, blob, label = self._snapshots.pop()
-        undone = [e for e in self.events[count:] if e.undoable]
-        del self.events[count:]
-        self.add(frame, clock, rack, shot, "undo",
-                 f"UNDO - {label or 'LAST SHOT'}", rule="M-03", actor="player",
-                 data={"undone": [e.text for e in undone]})
+        undone = [e for e in self.events[count:]
+                  if e.undoable and not e.data.get("reverted")]
+        for e in undone:
+            e.data["reverted"] = True
+        kind = "undo" if by == "player" else "revert"
+        self.add(frame, clock, rack, shot, kind,
+                 why or f"UNDO - {label or 'LAST SHOT'}",
+                 rule="M-03", actor=by,
+                 data={"undone": [e.seq for e in undone]})
         return blob
+
+    def live(self):
+        """The events that still stand - what the scoreboard is a view of."""
+        return [e for e in self.events if not e.data.get("reverted")]
 
     def lock_rack(self, frame, clock, rack, shot):
         """The next break has been observed: that rack is now history (M-03).
@@ -260,7 +278,7 @@ class MatchRecord:
 
     def flagged(self):
         """Everything marked for a human to look at: reviews and shaky calls."""
-        return [e for e in self.events
+        return [e for e in self.live()
                 if e.kind == "review" or e.uncertain]
 
     def as_list(self):

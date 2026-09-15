@@ -216,6 +216,46 @@ INTRUSION_MIN_AREA = 2.0
 #: cue shaft too thin to hold a ball has no business stopping anything.
 INTRUSION_THICK = 0.8
 
+#: Half-width, in ball radii, below which part of a region is left out when it
+#: is MEASURED for the too-long and reaching-in tests. The cushion nose along a
+#: rail reads as a thin dark strip that is not felt - 0.15 to 0.32 radii
+#: half-width on this footage - and a ball resting against that cushion merges
+#: with it into one region 6 to 7.6 diameters long, which both tests condemned:
+#: the ball was erased every frame it sat there, so the table read one ball
+#: short and a ball knocked off that rail into a pocket was never seen to go.
+#: A cue shaft measured 0.57, so 0.4 sheds the strip and still measures a cue.
+INTRUSION_SOLID = 0.4
+
+#: ... and the shedding only applies when what is left is BALL-SIZED pieces,
+#: in ball areas each, none of them touching the table's edge. Measured: a
+#: ball on the strip left 1.1 to 1.7 and two touching balls 2.3 to 2.5, while
+#: every hand left a piece of 4.9 to 15.9. A bridge hand whose thin cue tip is
+#: shed must still be measured whole - shed, it came in under INTRUSION_SPAN
+#: and its fingers were counted as balls.
+#:
+#: Fingers resting over a cushion are the harder case, because each one IS
+#: ball-sized once the strip is shed. What gives them away is where they are:
+#: they come in over the rail, so they run right up to the table's edge - 0.05
+#: radii from it, all 27 of them over this footage - while a ball resting on
+#: the cushion has the strip between it and the edge, 0.44 radii at the least.
+INTRUSION_LONE = 3.0
+
+
+def outer_rim(table, pockets=(), clear=0):
+    """The table's outer edge as a thin band, stopping short of every pocket.
+
+    What a hand resting on a rail touches and a ball on the cloth never does -
+    except in a pocket's jaw, where a ball on its way down reaches the edge as
+    well, so the band leaves a disc of `clear` pixels round each pocket out.
+    Taken from the table mask BEFORE the pocket holes are cut into it: the
+    holes' own edges are where balls go down, not where hands come in.
+    """
+    rim = cv2.subtract(table, cv2.erode(table, np.ones((5, 5), np.uint8)))
+    for p in pockets or ():
+        cv2.circle(rim, (int(p.x), int(p.y)), int(round(clear)), 0, -1)
+    return rim
+
+
 #: One erased region. `bulky` is the flag the game layer reads: something was
 #: on the table that could have hidden a ball, so this frame's count is a
 #: guess. `box` is (x, y, w, h), for drawing it on the overlay.
@@ -224,7 +264,8 @@ Intrusion = namedtuple("Intrusion", "label area span thick fill edge bulky why x
 
 def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
                     span=INTRUSION_SPAN, edge_area=INTRUSION_EDGE_AREA,
-                    fill=INTRUSION_FILL, thick=INTRUSION_THICK):
+                    fill=INTRUSION_FILL, thick=INTRUSION_THICK,
+                    solid=INTRUSION_SOLID, lone=INTRUSION_LONE, rim=None):
     """Which connected regions of the mask are not balls but a player.
 
     A player's arm over the table is not felt either, and a ball-sized disc
@@ -236,7 +277,7 @@ def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
     Asked of the WHOLE REGION it is not, and that is the trick here. An arm,
     the hand on the end of it and the cue in that hand are one connected black
     mass, because they touch; so the fingertips that each look exactly like a
-    ball are part of a region that, taken together, obviously is not one. Three
+    ball are part of a region that, taken together, obviously is not one. Four
     things give it away, any one of which is enough:
 
       too big     Only sixteen balls exist, so one region holds at most sixteen
@@ -248,11 +289,28 @@ def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
                   region that touches the table boundary, is bigger than a few
                   balls and is packed far too loosely to be balls came from
                   outside.
+      over the rail
+                  A hand RESTING on a rail is neither big, long nor loose - two
+                  fingers over the cushion read as two tidy balls. But its
+                  solid part runs right up to the table's outer edge, which a
+                  ball on the cloth never reaches outside a pocket's jaw. Only
+                  tested against a `rim` band from outer_rim(), which leaves
+                  the pockets out.
 
     Whichever fires, the answer is the same and it is the point of doing this
     by region: the ENTIRE mass is rejected, every attached fingertip with it.
     Picking off the fingers one at a time cannot work, because one at a time
     they are indistinguishable from balls.
+
+    One exception to measuring the whole region: when shedding everything
+    thinner than INTRUSION_SOLID leaves nothing but ball-sized pieces, clear of
+    the table's edge, length and packing are measured on those pieces. That is
+    a ball joined to the thin cushion strip along a rail, and it measures as
+    the one ball it is rather than as a long, loosely packed thing reaching in
+    over the edge. A hand leaves a piece far bigger than a ball, and fingers
+    over a cushion leave pieces that run up to the edge; both are measured
+    whole exactly as before. Without a table mask there is no edge to check,
+    and nothing is exempted.
 
     `table` is the table mask the balls were found inside; without it the
     reaching-in test is skipped and only the size tests are left.
@@ -268,6 +326,8 @@ def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
     border = None
     if table is not None:
         border = cv2.subtract(table, cv2.erode(table, np.ones((5, 5), np.uint8)))
+    pad = max(1, int(round(solid * r)))
+    shed = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * pad + 1, 2 * pad + 1))
 
     found = []
     for i in range(1, count):                     # 0 is the background
@@ -277,17 +337,32 @@ def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
         x0, y0 = stats[i, cv2.CC_STAT_LEFT], stats[i, cv2.CC_STAT_TOP]
         w, h = stats[i, cv2.CC_STAT_WIDTH], stats[i, cv2.CC_STAT_HEIGHT]
         roi = np.where(labels[y0:y0 + h, x0:x0 + w] == i, 255, 0).astype(np.uint8)
-        cnts, _ = cv2.findContours(roi, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # The solid part: opened with a disc, so strips narrower than it are
+        # shed. Padded first, or the crop's own edge would stop the erosion.
+        core = cv2.morphologyEx(
+            cv2.copyMakeBorder(roi, pad, pad, pad, pad, cv2.BORDER_CONSTANT, 0),
+            cv2.MORPH_OPEN, shed)
+        n, _, pieces, _ = cv2.connectedComponentsWithStats(core)
+        ball_sized = (border is not None and n > 1
+                      and pieces[1:, cv2.CC_STAT_AREA].max() <= lone * ball_area
+                      and not cv2.countNonZero(cv2.bitwise_and(
+                          core[pad:pad + h, pad:pad + w],
+                          border[y0:y0 + h, x0:x0 + w])))
+        over_rail = rim is not None and cv2.countNonZero(cv2.bitwise_and(
+            core[pad:pad + h, pad:pad + w], rim[y0:y0 + h, x0:x0 + w])) > 0
+        measured = core if ball_sized else roi
+        measured_area = cv2.countNonZero(measured)
+        cnts, _ = cv2.findContours(measured, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not cnts:
             continue
         # The MINIMUM-area rectangle, not the upright bounding box: an arm lies
         # across the table on the diagonal, and a rack measured by its upright
         # box is 7.1 diameters on the diagonal rather than the 4.7 it really is
         # - which would condemn the rack and let the arm off on the same number.
-        (rw, rh) = cv2.minAreaRect(max(cnts, key=cv2.contourArea))[1]
+        (rw, rh) = cv2.minAreaRect(np.vstack(cnts))[1]
         major = max(rw, rh)
         long_ = major / (2.0 * r)
-        packed = area / max(1.0, rw * rh)
+        packed = measured_area / max(1.0, rw * rh)
         half = float(dist[y0:y0 + h, x0:x0 + w][roi > 0].max()) / float(r)
         touches = (border is not None and
                    cv2.countNonZero(cv2.bitwise_and(roi,
@@ -298,8 +373,11 @@ def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
             why = f"{area / ball_area:.0f} ball areas in one piece"
         elif long_ > span:
             why = f"{long_:.1f} ball diameters long"
-        elif (touches and area >= edge_area * ball_area and packed < fill):
+        elif (touches and measured_area >= edge_area * ball_area
+              and packed < fill):
             why = "reaches in over the table edge"
+        elif over_rail:
+            why = "rests over the rail"
         else:
             continue
 
@@ -312,7 +390,7 @@ def find_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS,
     return labels, found
 
 
-def drop_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS):
+def drop_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS, rim=None):
     """The mask with every non-ball region erased whole, and what was erased.
 
     A ball hidden under an arm is lost for those frames, which costs nothing -
@@ -320,7 +398,7 @@ def drop_intrusions(not_felt, r, table=None, max_balls=MAX_BALLS):
     costs nothing either, for the same reason, and losing it is the entire
     point: attached to the arm it was going to be counted at the wrong place.
     """
-    labels, found = find_intrusions(not_felt, r, table, max_balls)
+    labels, found = find_intrusions(not_felt, r, table, max_balls, rim=rim)
     if not found:
         return not_felt, found
     out = not_felt.copy()

@@ -107,13 +107,15 @@ RULES = [
     _r("F-03", AUTO, "Wrong group hit first", "games.EightBallGame._judge_fouls",
        f"Only at >= {CONTACT_CONFIDENCE:.0%} confidence; below that, F-09."),
     _r("F-04", AUTO, "No rail after contact", "games.EightBallGame._judge_fouls",
-       "logic.RailWatch sees a ball enter the cushion band."),
+       "A ball entering the cushion band proves contact; its absence is only "
+       "believed at >= 15 fps, otherwise no call."),
     _r("F-05", AUTO, "No object ball hit at all", "games.EightBallGame._judge_fouls",
        "Nothing but the cue ball moved."),
     _r("F-06", MANUAL, "Ball touched by hand or cue", "games.BaseGame.mark_foul",
        "HUD tap only. A camera cannot separate a hand from a legal bridge."),
-    _r("F-07", LOGGED, "Double hit / push / scoop", "logic.GameSession._log_contact",
-       "Flagged for replay above a contact-duration threshold. Never ruled on."),
+    _r("F-07", LOGGED, "Double hit / push / scoop", "logic.GameSession._facts",
+       "Never ruled on. Contact duration needs >120 fps; at this frame rate "
+       "nothing can be measured, so nothing is flagged rather than guessed."),
     _r("F-08", DEFERRED, "Frozen-ball rail requirement", "logic.GameSession._frozen",
        "Marked frozen on the HUD and handed to the players."),
     _r("F-09", AUTO, "Contact ambiguous", "games.EightBallGame._judge_fouls",
@@ -158,7 +160,7 @@ RULES = [
        "No fouls, no turns, no win conditions. TSR / CRR / SDR only."),
     _r("M-12", AUTO, "Match record", "match_record.MatchRecord",
        "The log is the source of truth; the scoreboard is a view of it."),
-    _r("M-13", MANUAL, "Disputed call", "main.draw_review",
+    _r("M-13", MANUAL, "Disputed call", "main.Review",
        "Pulls the last 10 seconds. BPS does not overrule."),
     _r("M-14", AUTO, "Confidence display", "main.scoreboard",
        "Sub-threshold calls carry a visible dot."),
@@ -168,7 +170,7 @@ RULES = [
     # ---- nine-ball --------------------------------------------------------
     _r("N-01", AUTO, "Lowest ball first", "games.NineBallGame._judge_fouls"),
     _r("N-02", AUTO, "9 on the snap", "games.NineBallGame._judge_break"),
-    _r("N-03", AUTO, "9 on a foul is spotted", "games.NineBallGame._judge_nine"),
+    _r("N-03", AUTO, "9 on a foul is spotted", "games.NineBallGame._credit"),
     _r("N-04", AUTO, "Points and dead balls", "games.NineBallGame._credit",
        "Invariant: p1 + p2 + dead = 10 per rack."),
 
@@ -196,14 +198,91 @@ RULES = [
 BY_ID = {rule.id: rule for rule in RULES}
 
 
+#: The league team manual (League Years '26/27 to '28/29), which the client
+#: supplied after the CSV and chose to follow where the two disagree: groups
+#: assigned on the break (3.4c), scoresheet innings (section 5), and the real
+#: Skill Level ranges (section 4). Ids are the manual's own section numbers:
+#: TM = Game Rules (section 3), SC = scoresheets (5), EQ = the race charts (4),
+#: GR = General Rules (section 2). Kept apart from RULES because `check()`
+#: compares RULES with the CSV, and these rows are not in it.
+#:
+#: Nothing player-facing may quote these titles verbatim if they would break
+#: H-04; they are for the code and the match record.
+MANUAL_RULES = [
+    _r("TM-1", MANUAL, "Lag for the first break", "games.BaseGame",
+       "--lag-winner: breaks rack 1 and is the top of every inning."),
+    _r("TM-2", DEFERRED, "Racking order", "logic.GameSession._racked",
+       "The rack is detected; the order of balls inside it is not readable."),
+    _r("TM-3", AUTO, "Legal break", "games.EightBallGame._judge_break",
+       "Illegal: re-rack by the same breaker, by the opponent if it scratched."),
+    _r("TM-4", AUTO, "After the break", "games.EightBallGame._judge_break",
+       "8 on the break wins (loses with a foul); groups on the break; 9 on the "
+       "snap; push-outs in Masters only."),
+    _r("TM-5", MANUAL, "Shooting the wrong balls",
+       "games.EightBallGame.swap_groups",
+       "An uncalled wrong-group foul: both players take the new categories."),
+    _r("TM-6", AUTO, "Combination shots", "games.EightBallGame.shot_ended",
+       "Credited on what went down; the 8 may never be hit first."),
+    _r("TM-7", AUTO, "Pocketed balls", "logic.GameSession._reconcile_phantoms",
+       "Bounce-outs are not pocketed; hanging and wedged balls as M-02/W-11."),
+    _r("TM-8", AUTO, "Balls on the floor", "games.NineBallGame.shot_ended",
+       "Spotted; never scored; the 8 on the floor loses."),
+    _r("TM-9", AUTO, "Accidentally moved balls", "logic.GameSession._replaced",
+       "Put back where they sat; a foul only if one touched the cue ball."),
+    _r("TM-10", AUTO, "Close hits go to the shooter",
+       "games.EightBallGame._judge_fouls", "The same principle as F-09."),
+    _r("TM-11", DEFERRED, "One foot on the floor", "rules",
+       "Not a foul - a sportsmanship matter, and not observable."),
+    _r("TM-12", DEFERRED, "Marking the table", "rules",
+       "A sportsmanship matter, not a scoring event."),
+    _r("TM-13", MANUAL, "Stalemates", "games.NineBallGame.stalemate",
+       "8-ball: rack void. 9-ball: points stand, remaining balls dead."),
+    _r("TM-14", MANUAL, "Frozen balls", "games.BaseGame.declare_frozen",
+       "In effect only once declared and agreed by both players."),
+    _r("TM-15", MANUAL, "The ball-in-hand fouls", "games.BaseGame.FOUL_REASONS",
+       "The complete list. Auto-called where the camera can see them."),
+    _r("TM-16", AUTO, "How to win a game", "games.EightBallGame._judge_eight",
+       "Includes 16d (unmarked 8, opponent's call) and 16e (8 on a foul)."),
+    _r("SC-8", AUTO, "8-ball scoresheet", "games.BaseGame._set_turn",
+       "Complete innings only; the lag loser closes each one."),
+    _r("SC-9", AUTO, "9-ball scoresheet", "games.NineBallGame.score",
+       "Dead balls; ten per rack; points past the target are not marked."),
+    _r("SC-MP", DEFERRED, "Match points per individual match",
+       "team_match.MatchPoints",
+       "The chart is printed on the scoresheet, not in the manual."),
+    _r("EQ-1", AUTO, "Race charts", "skill_level.RaceChart",
+       "Singles and doubles, both games."),
+    _r("EQ-2", AUTO, "Starting levels", "skill_level.carry_over",
+       "New players start at 3; levels carry across games with limits."),
+    _r("GR-12", AUTO, "Declare order", "team_match.declares_first"),
+    _r("GR-14", AUTO, "Bye points", "team_match.bye_points"),
+    _r("GR-15", AUTO, "Forfeit points", "team_match.forfeit_points"),
+    _r("GR-18", MANUAL, "Coaching and time-outs", "skill_level.timeouts",
+       "Per format: open 2 or 1, doubles match 1, Masters none."),
+    _r("GR-21", MANUAL, "Defensive shots", "games.BaseGame.mark_defence",
+       "The shooter's intent decides, so a person marks it."),
+    _r("GR-23", AUTO, "Local lowest attainable", "team_match.lowest_attainable"),
+    _r("GR-25", AUTO, "Team skill limit", "team_match.check_lineup",
+       "23, 13, 14 and 10 rules, reduced line-ups, and the penalty."),
+    _r("GR-26", AUTO, "Senior player cap", "team_match.check_lineup"),
+    _r("GR-27", AUTO, "Playoffs", "team_match.clinched",
+       "Clinching, ties in standings and matches, eligibility, wild card."),
+    _r("GR-ADMIN", DEFERRED, "League administration", "team_match",
+       "Membership, fees, age, ID, rosters, gambling, equipment, amateur "
+       "status, protests, appeals, conduct and tournaments: decided by people."),
+]
+
+MANUAL_BY_ID = {r.id: r for r in MANUAL_RULES}
+
+
 def rule(rid):
     """The spec row behind a call, so log entries can cite it."""
-    return BY_ID.get(rid)
+    return BY_ID.get(rid) or MANUAL_BY_ID.get(rid)
 
 
 def cite(rid):
     """'W-06 Missing the 8 entirely' - what a log entry and the HUD show."""
-    r = BY_ID.get(rid)
+    r = rule(rid)
     return f"{rid} {r.title}" if r else rid
 
 
@@ -262,6 +341,12 @@ def banner(path=None):
             f"({cov.get(AUTO, 0)} auto, {cov.get(PROMPT, 0)} prompt, "
             f"{cov.get(MANUAL, 0)} player-called, {cov.get(LOGGED, 0)} logged, "
             f"{cov.get(DEFERRED, 0)} deferred)")
+    manual = {}
+    for r in MANUAL_RULES:
+        manual[r.handling] = manual.get(r.handling, 0) + 1
+    line += (f"\n        league manual: {len(MANUAL_RULES)} sections "
+             f"({manual.get(AUTO, 0)} auto, {manual.get(MANUAL, 0)} "
+             f"player-called, {manual.get(DEFERRED, 0)} not scored)")
     missing, extra, unlocked = check(path)
     if missing:
         line += f"\n        NEW IN THE CSV, NOT IMPLEMENTED: {', '.join(missing)}"
