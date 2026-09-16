@@ -1064,14 +1064,25 @@ class Pots(unittest.TestCase):
                                                           EIGHT: 1, CUE: 1})))
         self.assertEqual(flicker._settle_up(101), [])
 
-        # Two balls gone at once, or two classes short, is arithmetic nobody
-        # should score from - and neither is a settling held for a hand.
+        # Two balls gone and the same two classes short: the count and the
+        # census are two witnesses agreeing, and both balls are scored.
         two = self.settled(before=6, after=4)
         two.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
                                                  CUE: 1})
         two.census.extend([(True, collections.Counter({STRIPE: 2, EIGHT: 1,
                                                        CUE: 1}))] * logic.SETTLE_FRAMES)
-        self.assertEqual(two._settle_up(101), [])
+        self.assertEqual(sorted(p.cls for p in two._settle_up(101)),
+                         sorted([STRIPE, SOLID]))
+
+        # Two classes short with one ball gone is a label that changed, not a
+        # ball that left - and neither is a settling held for a hand.
+        relabel = self.settled(before=6, after=5)
+        relabel.before_census = collections.Counter({STRIPE: 3, SOLID: 1,
+                                                     EIGHT: 1, CUE: 1})
+        relabel.census.extend([(True, collections.Counter({STRIPE: 2, EIGHT: 1,
+                                                           CUE: 1}))]
+                              * logic.SETTLE_FRAMES)
+        self.assertEqual(relabel._settle_up(101), [])
 
         held = self.settled(before=6, after=5)
         held.last_hold = 9
@@ -1081,6 +1092,18 @@ class Pots(unittest.TestCase):
                                                         CUE: 1}))] * logic.SETTLE_FRAMES)
         self.assertEqual(held._settle_up(101), [])
 
+        # ... but a settling held a frame or two is a player straightening up
+        # over the shot they just played, and its census is still read. Both
+        # of the pots missed at 7:07 and 7:29 in game.mp4 were held exactly two.
+        brief = self.settled(before=6, after=5)
+        brief.last_hold = 2
+        brief.before_census = collections.Counter({STRIPE: 3, SOLID: 1,
+                                                   EIGHT: 1, CUE: 1})
+        brief.census.extend([(True, collections.Counter({STRIPE: 3, EIGHT: 1,
+                                                         CUE: 1}))]
+                            * logic.SETTLE_FRAMES)
+        self.assertEqual([p.cls for p in brief._settle_up(101)], [SOLID])
+
         # No drop in the count, no credit, whatever the labels flicker to.
         same = self.settled(before=6, after=6)
         same.before_census = collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
@@ -1088,6 +1111,56 @@ class Pots(unittest.TestCase):
         same.census.extend([(True, collections.Counter({STRIPE: 4, EIGHT: 1,
                                                         CUE: 1}))] * logic.SETTLE_FRAMES)
         self.assertEqual(same._settle_up(101), [])
+
+    def test_a_ball_that_went_down_was_hit(self):
+        # 07:07 in game.mp4: the solid was credited off the census on a shot
+        # where only the cue ball was ever matched between frames, and F-05
+        # called "NO BALL HIT" on the player who had just potted their own.
+        s = session()
+        s.shots.movers = {1: CUE}
+        pot = logic.Pot(101, 130, SOLID, "TL", 40.0, 20.0, 0, False, 40, 40,
+                        logic.CENSUS)
+        self.assertTrue(s._facts([pot], []).hit_object)
+
+        # Nothing down and nothing but the cue ball moving is still F-05.
+        self.assertIs(s._facts([], []).hit_object, False)
+
+    def test_the_census_is_read_from_the_clear_frames_there_are(self):
+        # A window with a hand across most of it still has the frame where the
+        # player stood back, and the count is taken from that same frame.
+        mixed = session()
+        mixed.before = 6
+        mixed.recent.extend([(False, 6)] * (logic.SETTLE_FRAMES - 1)
+                            + [(True, 5)])
+        mixed.before_census = collections.Counter({STRIPE: 3, SOLID: 1,
+                                                   EIGHT: 1, CUE: 1})
+        mixed.census.extend(
+            [(False, collections.Counter({STRIPE: 3, SOLID: 1, EIGHT: 1,
+                                          CUE: 1}))] * (logic.SETTLE_FRAMES - 1)
+            + [(True, collections.Counter({STRIPE: 3, EIGHT: 1, CUE: 1}))])
+        self.assertEqual([p.cls for p in mixed._settle_up(101)], [SOLID])
+
+    def test_a_cue_ball_the_table_still_shows_is_not_a_scratch(self):
+        # 10:10 in game.mp4, the rack-deciding shot. The cue ball ran the
+        # length of the table, outjumped the tracker and died beside TL under
+        # a player's arm, while the 8 it left behind really did go down. The
+        # clear frame shows the cue still on the cloth, so the scratch claim is
+        # refused and the 8 is credited instead - a rack won, not lost.
+        end = session()
+        end.before = 4
+        end.recent.extend([(False, 4)] * (logic.SETTLE_FRAMES - 1)
+                          + [(True, 2)])
+        end.before_census = collections.Counter({CUE: 1, EIGHT: 1, STRIPE: 2})
+        end.census.extend(
+            [(False, collections.Counter({CUE: 1, EIGHT: 1, STRIPE: 2}))]
+            * (logic.SETTLE_FRAMES - 1)
+            + [(True, collections.Counter({CUE: 1, STRIPE: 1}))])
+        end.candidates = [logic.Pot(3000, 136, CUE, "TL", 106.0, 72.3, 803,
+                                    True, 120, 130)]
+        credited = end._settle_up(3009)
+        self.assertEqual(sorted(p.cls for p in credited),
+                         sorted([EIGHT, STRIPE]))
+        self.assertNotIn(CUE, [p.cls for p in credited])
 
     def test_W07_needs_the_eight_to_have_been_there_all_along(self):
         # A rack must not end because one frame once called something the 8.
@@ -1143,6 +1216,210 @@ class Pots(unittest.TestCase):
         g = on_solids(eight())
         shot(g, pots=[SOLID, CUE])
         self.assertEqual((g.fouls, g.turn, g.potted[SOLID]), ([1, 0], 1, 2))
+
+    FULL = {STRIPE: 3, SOLID: 2, EIGHT: 1, CUE: 1}
+    SOLID_DOWN = {STRIPE: 3, SOLID: 1, EIGHT: 1, CUE: 1}
+
+    def census(self, before, now, after):
+        """A clear settled table: its count, and the classes either side."""
+        s = self.settled(before=sum(before.values()), after=after)
+        s.before_census = collections.Counter(before)
+        s.census.extend([(True, collections.Counter(now))] * logic.SETTLE_FRAMES)
+        return s
+
+    def test_the_settled_census_decides_what_went_down(self):
+        # The id switch: a stripe's track died beside TM in a collision while
+        # the solid went down elsewhere. Every stripe is still on the settled
+        # table, so the stripe claim scores nothing and the solid does.
+        s = self.census(self.FULL, self.SOLID_DOWN, after=6)
+        switched = logic.Pot(100, 3, STRIPE, "TM", 40.0, 25.0, 50, False, 530, 50)
+        s.candidates = [switched]
+        self.assertEqual([(p.cls, p.pocket, p.source) for p in s._settle_up(101)],
+                         [(SOLID, None, logic.INFERRED)])
+        self.assertIn(3, [r["track"] for r in s.pots.rejected])
+
+        # ... and a claim at a mouth for the class that did go says where.
+        s = self.census(self.FULL, self.SOLID_DOWN, after=6)
+        went = logic.Pot(100, 2, SOLID, "BR", 40.0, 20.0, 50, False, 960, 470)
+        s.candidates = [switched, went]
+        self.assertEqual([(p.cls, p.pocket, p.track, p.source)
+                          for p in s._settle_up(101)],
+                         [(SOLID, "BR", 2, logic.CENSUS)])
+
+        # A young track's label means nothing, but where it vanished does.
+        young = logic.Pot(100, 8, STRIPE, "BL", 40.0, 30.0, 2, False, 40, 460)
+        s = self.census(self.FULL, self.SOLID_DOWN, after=6)
+        s.candidates = [young]
+        self.assertEqual([(p.cls, p.pocket) for p in s._settle_up(101)],
+                         [(SOLID, "BL")])
+
+        # ... except for the 8, whose pocket W-03 can lose a rack on.
+        s = self.census(self.FULL, {STRIPE: 3, SOLID: 2, CUE: 1}, after=6)
+        s.candidates = [young]
+        credited = s._settle_up(101)
+        self.assertEqual([(p.cls, p.pocket) for p in credited], [(EIGHT, None)])
+        self.assertIsNone(s._facts(credited, []).eight_pocket)
+
+    def test_which_pocket_comes_from_the_last_heading(self):
+        self.assertEqual(logic.heading_pocket(640, 330, (600, 300), POCKETS)[0].name,
+                         "BR")
+        self.assertIsNone(logic.heading_pocket(640, 330, None, POCKETS)[0])
+
+        # No claim at any mouth, but the solid's track was lost heading for BR.
+        s = self.census(self.FULL, self.SOLID_DOWN, after=6)
+        s.vanished = [logic.Vanish(95, 2, SOLID, 640, 330, (600, 300), 40, False)]
+        credited = s._settle_up(101)
+        self.assertEqual([(p.cls, p.pocket, p.track) for p in credited],
+                         [(SOLID, "BR", 2)])
+        self.assertLess(s.pots.confidence(credited[0]), rules.CONTACT_CONFIDENCE)
+
+    def test_a_ball_that_rattled_out_is_on_the_settled_table(self):
+        # W-10: the solid vanished into the BR jaw and came back out. The
+        # settled table still holds it, so nothing went down.
+        s = self.census(self.FULL, self.FULL, after=7)
+        s.candidates = [logic.Pot(100, 2, SOLID, "BR", 20.0, 20.0, 50, False,
+                                  985, 490)]
+        self.assertEqual(s._settle_up(101), [])
+
+        # A pot scored off the census with no pocket is still taken back when
+        # its ball turns up beside any pocket after the table settled.
+        p = session()
+        g = p.game
+        on_solids(g)
+        frame = judged(p, g, pots=[SOLID])
+        pot = logic.Pot(frame, -1, SOLID, None, 0.0, 0.0, 0, False, None, None,
+                        logic.INFERRED)
+        p.last_credited, p.all_pots = [pot], [pot]
+        p.resting, p.settled_balls = [(300, 300), (600, 200)], 14
+        p._reconcile_phantoms([(300, 300), (600, 200), (975, 480)],
+                              frame + FPS // 2)
+        self.assertEqual((g.potted[SOLID], g.turn, p.phantoms), (1, 1, 1))
+
+    def _ball_lighter(self, now_census):
+        """A settled table one ball lighter, with only one ball seen to move."""
+        s = session()
+        on_solids(s.game)
+        s.settled_balls = 8
+        s.resting = [(100, 100), (200, 200), (300, 300)]
+        s.settled_census = collections.Counter({SOLID: 4, STRIPE: 2, EIGHT: 1,
+                                                CUE: 1})
+        s.recent.extend([(True, 7)] * logic.SETTLE_FRAMES)
+        s.window.extend([(True, [(100, 100), (200, 200)])] * logic.SETTLE_FRAMES)
+        s.census.extend([(True, collections.Counter(now_census))]
+                        * logic.SETTLE_FRAMES)
+        return s
+
+    def test_a_table_a_ball_lighter_is_a_shot_even_with_no_claim(self):
+        # 07:07 in game.mp4: a solid went down, no track claimed it at a mouth,
+        # one ball read as having moved, and the episode was refused as "not a
+        # shot" - so the pot went unscored, the turn never passed, and the
+        # count stayed wrong for the rest of the rack. The census naming the
+        # class that left is the second witness the missing ball needs.
+        s = self._ball_lighter({SOLID: 3, STRIPE: 2, EIGHT: 1, CUE: 1})
+        credited = s._settle(101)
+        self.assertEqual([p.cls for p in credited], [SOLID])
+        self.assertEqual(s.game.turn, 0)        # their own ball: still at the table
+
+        # With nothing short in the census, a count that dips on its own is
+        # still not a shot: no verdict is invented from one ball moving.
+        quiet = self._ball_lighter({SOLID: 4, STRIPE: 2, EIGHT: 1, CUE: 1})
+        self.assertEqual(quiet._settle(101), [])
+        self.assertIn("not a shot", quiet.episodes[-1]["verdict"])
+
+    def test_the_score_is_read_off_what_the_table_still_holds(self):
+        g = on_solids(eight())                  # Player 1 on solids, one down
+        self.assertEqual(g.score(0), 1)
+        # Four solids on the cloth means three are down, not one: two more
+        # than the camera caught, which is what it reports adding.
+        self.assertEqual(g.reconcile_score({SOLID: 4, STRIPE: 7}), [(SOLID, 2)])
+        self.assertEqual((g.score(0), g.score(1)), (3, 0))
+        # Never downward: one reading does not take back a ball that was
+        # watched going in - M-04 and W-10 do that, on their own evidence.
+        self.assertEqual(g.reconcile_score({SOLID: 7, STRIPE: 7}), [])
+        self.assertEqual(g.score(0), 3)
+
+    def test_a_missed_pot_is_corrected_at_the_next_settling(self):
+        s = session()
+        on_solids(s.game)
+        s.recent.extend([(True, 13)] * logic.SETTLE_FRAMES)
+        s.census.extend([(True, collections.Counter({SOLID: 4, STRIPE: 7,
+                                                     EIGHT: 1, CUE: 1}))]
+                        * logic.SETTLE_FRAMES)
+        self.assertEqual(s._reconcile_score(), [(SOLID, 2)])
+        self.assertEqual(s.game.score(0), 3)
+
+        # Not through a hand, and not on a settling that was held for one.
+        busy = session()
+        on_solids(busy.game)
+        busy.recent.extend([(False, 13)] * logic.SETTLE_FRAMES)
+        busy.census.extend([(False, collections.Counter({SOLID: 4, STRIPE: 7,
+                                                         EIGHT: 1, CUE: 1}))]
+                           * logic.SETTLE_FRAMES)
+        self.assertEqual(busy._reconcile_score(), [])
+        held = session()
+        on_solids(held.game)
+        held.last_hold = 9
+        held.recent.extend([(True, 13)] * logic.SETTLE_FRAMES)
+        held.census.extend([(True, collections.Counter({SOLID: 4, STRIPE: 7,
+                                                        EIGHT: 1, CUE: 1}))]
+                           * logic.SETTLE_FRAMES)
+        self.assertEqual(held._reconcile_score(), [])
+
+        # A label that flickers puts the classes out of step with the count,
+        # and then the table is not read at all.
+        odd = session()
+        on_solids(odd.game)
+        odd.recent.extend([(True, 12)] * logic.SETTLE_FRAMES)
+        odd.census.extend([(True, collections.Counter({SOLID: 4, STRIPE: 7,
+                                                       EIGHT: 1, CUE: 1}))]
+                          * logic.SETTLE_FRAMES)
+        self.assertEqual(odd._reconcile_score(), [])
+
+    def test_a_player_who_cleared_their_group_wins_on_the_eight(self):
+        # The 4-5 bug: the camera saw five of Player 1's solids go down, the
+        # table shows all seven are gone, and the 8 they then potted was read
+        # as "8 POTTED EARLY" - a rack handed to the opponent on a miscount.
+        s = session()
+        g = s.game
+        on_solids(g)
+        g.potted[SOLID] = 5
+        s.recent.extend([(True, 9)] * logic.SETTLE_FRAMES)
+        s.census.extend([(True, collections.Counter({STRIPE: 7, EIGHT: 1,
+                                                     CUE: 1}))]
+                        * logic.SETTLE_FRAMES)
+        self.assertEqual(s._reconcile_score(), [(SOLID, 2)])
+        self.assertTrue(g.on_the_eight(0))
+
+        shot(g, pots=[EIGHT])
+        self.assertEqual((g.over, g.winner, g.score(0)), (True, 0, 7))
+        self.assertIn("W-01", cited(g))
+
+    def test_an_id_switch_mid_shot_does_not_decide_the_pot(self):
+        # The whole pipeline, frame by frame. The cue strikes the solid into
+        # BR; in the collision the stripe's id dies beside TM and is reborn,
+        # and the solid's id dies mid-flight 400 px short of the pocket, is
+        # reborn unlabelled, and is lost again 215 px out - past every mouth.
+        rest = {1: (200, 250, CUE), 2: (600, 300, SOLID), 3: (560, 60, STRIPE),
+                4: (500, 400, EIGHT)}
+        after = {1: (560, 295, CUE), 4: (500, 400, EIGHT)}
+        script = [rest] * 6 + [
+            {**rest, 1: (300, 270, CUE)},
+            {**rest, 1: (400, 280, CUE)},
+            {**rest, 1: (560, 295, CUE), 2: (640, 330, SOLID),
+             3: (530, 50, STRIPE)},
+            {**after, 6: (505, 60, STRIPE), 7: (760, 400, None)},
+            {**after, 6: (480, 75, STRIPE), 7: (800, 420, None)},
+        ] + [{**after, 6: (460, 85, STRIPE)}] * 9
+        s = session()
+        credited = []
+        for f, balls in enumerate(script, 1):
+            tracked = [(tid, x, y, R) for tid, (x, y, _c) in balls.items()]
+            labels = {tid: Label(c, "voted")
+                      for tid, (_x, _y, c) in balls.items() if c}
+            credited += s.update(tracked, labels, f)
+        self.assertEqual([(p.cls, p.pocket) for p in credited], [(SOLID, "BR")])
+        # The stripe claim at TM scored nothing: no pot was credited for it.
+        self.assertEqual([p.cls for p in s.all_pots], [SOLID])
 
 
 if __name__ == "__main__":

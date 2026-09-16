@@ -1314,7 +1314,8 @@ def main():
                 id_counts.append(sum(1 for it in items if it[4] is not None))
 
                 for pot in session.update(tracked, labels, idx, intruding=hand):
-                    print(f"  POT   frame {idx}  {pot.cls.upper()} in {pot.pocket} "
+                    print(f"  POT   frame {idx}  {pot.cls.upper()} in "
+                          f"{pot.pocket or 'unknown pocket'} [{pot.source}] "
                           f"(track {pot.track}, {pot.dist:.0f} px out, "
                           f"closing {pot.closed:.0f} px/frame)", flush=True)
                 if csv_writer:
