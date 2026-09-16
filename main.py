@@ -3,7 +3,10 @@ BPS prototype - find the balls, score the game, and put the client's HUD on it.
 
 Five pieces, in order, after a one-time pocket click:
   0. POCKETS  - detect_pocket.py shows the first frame and takes six clicks, one
-                per pocket, then saves them to pockets.json.
+                per pocket, then saves them to pockets.json. A live camera is
+                clicked the same way and keeps its own six in
+                pockets_live.json, so a camera and a clip of the same size
+                never inherit each other's table.
   1. DETECT   - server.py's felt mode finds where the balls are, and rejects
                 the player: an arm, the hand on it and the cue it holds are one
                 connected non-felt mass, erased WHOLE.
@@ -41,8 +44,12 @@ THE HUD, AND WHY IT LOOKS THE WAY IT DOES
                   shows the evidence; the players decide, with UNDO.
 
 Usage:
-    python main.py                        # game.mp4 -> result.mp4
-    python main.py --show                 # live, with a clickable HUD
+    python main.py                        # asks: LIVE camera or VIDEO file
+    python main.py --source live          # straight to the first camera
+    python main.py --camera 1             # a particular camera
+    python main.py --source video         # game.mp4 -> result.mp4, no window
+    python main.py game.mp4               # a named clip, no menu
+    python main.py game.mp4 --show        # ... and watch it, with the HUD
     python main.py --game 9ball           # nine-ball rules
     python main.py --mode league --sl1 4 --sl2 6
     python main.py --mode practice        # analytics only (M-11)
@@ -89,6 +96,23 @@ from track_identity import UNKNOWN_BGR, BallClassRegistry
 DEFAULT_VIDEOS = ["game.mp4", "test.mp4", "input.mp4"]
 DEFAULT_OUTPUT = "result.mp4"
 
+#: A live camera keeps its own six pockets. Kept apart from pockets.json so a
+#: camera and a clip that happen to share a frame size - the check that guards
+#: every other mix-up - cannot silently inherit each other's calibration.
+LIVE_POCKET_FILE = "pockets_live.json"
+#: Device indices probed when looking for cameras: there is no portable way to
+#: ask an OS what it has, so opening them is the question.
+CAMERA_PROBE = 6
+#: What to assume when a camera will not say what its frame rate is, which is
+#: most of them. Everything downstream divides by this.
+LIVE_FPS = 30.0
+#: Frames read and thrown away before the first one is kept. Webcams open dark
+#: and spend the first moment settling exposure and focus.
+LIVE_WARMUP = 10
+#: Consecutive failed reads before a live run decides the camera is gone. A
+#: dropped frame is normal; sixty in a row is an unplugged cable.
+LIVE_MAX_MISSES = 60
+
 #: M-09 needs to know whether a table has ever had its first rack confirmed.
 #: That is a fact about the TABLE, not about a run, so it outlives the process.
 TABLE_MEMORY = "bps_table.json"
@@ -108,6 +132,125 @@ def find_default_video(folder):
         if name.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
             return os.path.join(folder, name)
     return None
+
+
+def open_camera(index):
+    """Open a capture device, or None if nothing answers on that index.
+
+    Windows defaults to the MSMF backend, which on many webcams takes seconds
+    to start and on some never does. DirectShow is what actually works, so it
+    goes first and the others are the fallback.
+    """
+    apis = ([cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY] if os.name == "nt"
+            else [cv2.CAP_ANY])
+    for api in apis:
+        cap = cv2.VideoCapture(index, api)
+        if cap.isOpened():
+            return cap
+        cap.release()
+    return None
+
+
+def find_cameras(limit=CAMERA_PROBE):
+    """[(index, width, height)] for every device that opens AND delivers.
+
+    Opening is not enough to go on: a device claimed by another program, or a
+    virtual camera with nothing behind it, opens happily and then hands over
+    no frames. One real frame is the only proof worth showing in a menu.
+    """
+    found = []
+    for index in range(limit):
+        cap = open_camera(index)
+        if cap is None:
+            continue
+        ok, frame = cap.read()
+        cap.release()
+        if ok:
+            found.append((index, frame.shape[1], frame.shape[0]))
+    return found
+
+
+def first_camera():
+    """The camera to use when none was named, or None. Index 0, quietly.
+
+    Sweeping every index makes OpenCV shout a paragraph about the backends it
+    tried on each empty one, so the usual case - the one webcam, on 0 - is
+    asked for directly and the noisy sweep is kept for when that fails.
+    """
+    cap = open_camera(0)
+    if cap is not None:
+        ok, _frame = cap.read()
+        cap.release()
+        if ok:
+            return 0
+    found = find_cameras()
+    return found[0][0] if found else None
+
+
+def _ask(prompt):
+    """input(), with Ctrl-C and a closed stdin meaning "quit", not "traceback"."""
+    try:
+        return input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        sys.exit("Cancelled - nothing was processed.")
+
+
+def choose_camera():
+    """Pick a camera: silent when there is one, a menu when there are several.
+
+    None means none was found, which is a reason to offer the video menu
+    again rather than to exit: a missing camera is usually a missing cable.
+    """
+    print("Looking for cameras ...")
+    found = find_cameras()
+    if not found:
+        print("  No camera found - nothing is plugged in, or another program "
+              "already has it.")
+        return None
+    if len(found) == 1:
+        index, w, h = found[0]
+        print(f"  Camera {index}  ({w}x{h})")
+        return index
+    for index, w, h in found:
+        print(f"  {index}) camera {index}  ({w}x{h})")
+    while True:
+        pick = _ask(f"Camera index [{found[0][0]}]: ")
+        if not pick:
+            return found[0][0]
+        if pick.isdigit() and int(pick) in [i for i, _w, _h in found]:
+            return int(pick)
+        print("  Pick one of the indices listed above.")
+
+
+def choose_source(here):
+    """The startup menu. Returns ("live", index) or ("video", path or None).
+
+    Only reached when nothing on the command line has already answered the
+    question, and never when no one is at the keyboard: a piped or scripted
+    run keeps the old behaviour and reads the default video, so every existing
+    invocation of this file still works untouched.
+    """
+    default = find_default_video(here)
+    if not sys.stdin or not sys.stdin.isatty():
+        return "video", None
+
+    while True:
+        print("\nInput source:")
+        print("  1) LIVE   - a camera on this machine")
+        print("  2) VIDEO  - a file on disk"
+              + (f", default {os.path.basename(default)}" if default else ""))
+        pick = _ask("Select 1 or 2 [2]: ").lower()
+        if pick in ("1", "l", "live"):
+            index = choose_camera()
+            if index is None:
+                continue            # let them fall back to a file
+            return "live", index
+        if pick in ("", "2", "v", "video"):
+            name = os.path.basename(default) if default else ""
+            path = _ask(f"Video path [{name}]: ").strip('"')
+            return "video", path or None
+        print("  Type 1 for a camera, 2 for a video file.")
 
 
 class Tracker:
@@ -481,7 +624,9 @@ def scoreboard(W, height, session, index, total, fps_now):
         cv2.circle(board, (int(W / 2 - tw / 2 - 14 * s), int(0.78 * height)),
                    max(3, int(5 * s)), BOARD_AMBER, -1, cv2.LINE_AA)
 
-    foot = f"FRAME {index}/{total}{DOT}{fps_now:.1f} FPS"
+    # A camera has no last frame, so there is no "of" to count towards.
+    foot = (f"FRAME {index}/{total}" if total else f"FRAME {index}{DOT}LIVE")
+    foot += f"{DOT}{fps_now:.1f} FPS"
     fx = edge + _board_text(board, foot, edge, 0.93 * height, 0.36 * s,
                             BOARD_DIM, 1, "left")
     # M-05: occlusion is normal play. A small grey dot and a quiet word, in the
@@ -1055,10 +1200,18 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("video", nargs="?", default=None,
                     help=f"input video (default: first of {', '.join(DEFAULT_VIDEOS)})")
+    ap.add_argument("--source", choices=("live", "video"), default=None,
+                    help="camera or file; asked at startup when neither this "
+                         "nor a video path is given")
+    ap.add_argument("--camera", type=int, default=None,
+                    help="camera device index (implies --source live; default: "
+                         "the first camera that delivers a frame)")
     ap.add_argument("--out", default=DEFAULT_OUTPUT,
                     help=f"annotated output video (default: {DEFAULT_OUTPUT})")
     ap.add_argument("--show", action="store_true",
-                    help="live window with a clickable HUD")
+                    help="window with a clickable HUD; automatic for a camera "
+                         "and whenever the startup menu was answered, so this "
+                         "is only needed alongside --source/--camera or a path")
     ap.add_argument("--stride", type=int, default=1,
                     help="process every Nth frame (default 1 = all)")
     ap.add_argument("--start", type=int, default=0, help="first frame to read")
@@ -1154,37 +1307,98 @@ def main():
     print(rules.banner())
     skill_level.assert_clean()
 
-    if args.video is None:
-        in_path = find_default_video(here)
-        if in_path is None:
-            sys.exit(f"No video found in {here}\n"
-                     f"Put one of {', '.join(DEFAULT_VIDEOS)} there, "
-                     f"or pass a path: python main.py clip.mp4")
+    # LIVE or VIDEO. A flag or a video path settles it; otherwise ask, which is
+    # what running main.py bare is for. Everything past this point works the
+    # same way either way - only where the frames come from has changed.
+    source = args.source
+    if source is None and args.video:
+        source = "video"
+    if source is None and args.camera is not None:
+        source = "live"
+    if source is None:
+        source, picked = choose_source(here)
+        if source == "live":
+            args.camera = picked
+        elif picked:
+            args.video = picked
+        # Someone answered a menu, so someone is sitting there watching: open
+        # the window without making them find out about --show first. A run
+        # driven by flags or a pipe is left alone, and still renders to
+        # result.mp4 unattended the way every existing script expects.
+        args.show = True
+    live = source == "live"
+
+    if live:
+        index = args.camera
+        if index is None:
+            index = first_camera()
+            if index is None:
+                sys.exit("No camera found. Plug one in, close whatever else is "
+                         "using it, or run: python main.py --source video")
+        cap = open_camera(index)
+        if cap is None:
+            sys.exit(f"Could not open camera {index} - another program may "
+                     f"already have it. Cameras that answered: "
+                     f"{[i for i, _w, _h in find_cameras()] or 'none'}")
+        in_path = f"camera:{index}"
+        # A rendered run cannot be tapped and a live one has every reason to
+        # be watched: the window IS the point of pointing a camera at a table.
+        args.show = True
     else:
-        in_path = args.video if os.path.isabs(args.video) else os.path.join(here, args.video)
-        if not os.path.exists(in_path):
-            sys.exit(f"Video not found: {in_path}")
+        if args.video is None:
+            in_path = find_default_video(here)
+            if in_path is None:
+                sys.exit(f"No video found in {here}\n"
+                         f"Put one of {', '.join(DEFAULT_VIDEOS)} there, "
+                         f"or pass a path: python main.py clip.mp4")
+        else:
+            in_path = (args.video if os.path.isabs(args.video)
+                       else os.path.join(here, args.video))
+            if not os.path.exists(in_path):
+                sys.exit(f"Video not found: {in_path}")
 
-    cap = cv2.VideoCapture(in_path)
-    if not cap.isOpened():
-        sys.exit(f"Could not open video: {in_path}")
+        cap = cv2.VideoCapture(in_path)
+        if not cap.isOpened():
+            sys.exit(f"Could not open video: {in_path}")
 
-    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    src_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
-    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    print(f"Input:  {in_path}  ({W}x{H}, {total} frames, {src_fps:.1f} fps)")
+    # A camera has no length, and reports its frame rate as 0 - or as 1000 -
+    # often enough that it cannot be trusted with a division.
+    total = 0 if live else int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
+    if not 1.0 <= src_fps <= 240.0:
+        src_fps = LIVE_FPS if live else 25.0
 
     if args.start:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, args.start)
+        if live:
+            print("        --start ignored: a camera has no past to seek to")
+            args.start = 0
+        else:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, args.start)
+
+    if live:
+        # Webcams open dark and spend the first moment settling exposure and
+        # focus. Calibrating felt and clicking pockets on frame 0 would be
+        # calibrating against whatever the sensor guessed before it looked.
+        for _ in range(LIVE_WARMUP):
+            cap.read()
 
     ok, frame = cap.read()
     if not ok:
-        sys.exit("Could not read the first frame.")
+        sys.exit("The camera opened but delivered no frames." if live
+                 else "Could not read the first frame.")
+
+    # The frame itself, not the capture's properties: a camera will happily
+    # report a resolution it is not actually sending.
+    H, W = frame.shape[:2]
+    print(f"Input:  {in_path}  ({W}x{H}, "
+          f"{'live' if live else f'{total} frames'}, {src_fps:.1f} fps)")
 
     pockets = None
-    pockets_path = (args.pockets if os.path.isabs(args.pockets)
-                    else os.path.join(here, args.pockets))
+    pocket_file = args.pockets
+    if live and pocket_file == detect_pocket.DEFAULT_POCKET_FILE:
+        pocket_file = LIVE_POCKET_FILE
+    pockets_path = (pocket_file if os.path.isabs(pocket_file)
+                    else os.path.join(here, pocket_file))
     if not args.no_pockets:
         pockets = detect_pocket.calibrate(frame, pockets_path, video=in_path,
                                           force=args.repick_pockets)
@@ -1272,6 +1486,7 @@ def main():
     idx = args.start
     processed = 0
     logged = 0
+    misses = 0
     counts = []
     id_counts = []
     t0 = time.perf_counter()
@@ -1286,7 +1501,18 @@ def main():
                 if not first:
                     ok, frame = cap.read()
                     if not ok:
-                        break
+                        if not live:
+                            break
+                        # A camera drops a frame now and then and carries on.
+                        # Only one that has really gone away ends a live run,
+                        # which a video's single failed read always does.
+                        misses += 1
+                        if misses > LIVE_MAX_MISSES:
+                            print(f"Camera stopped delivering frames after "
+                                  f"{processed} processed.")
+                            break
+                        continue
+                    misses = 0
                     idx += 1
                     if args.stride > 1 and (idx - args.start) % args.stride:
                         continue
@@ -1377,7 +1603,8 @@ def main():
                             ui["taps"].append(tap)
 
             if advanced and processed % 50 == 0:
-                print(f"  {processed} frames  |  frame {idx}/{total}  "
+                where = f"frame {idx}/{total}" if total else f"frame {idx}"
+                print(f"  {processed} frames  |  {where}  "
                       f"|  {counts[-1]} balls, "
                       f"{id_counts[-1]} named  |  {fps_now:.1f} fps", flush=True)
 
