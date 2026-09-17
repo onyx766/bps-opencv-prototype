@@ -9,10 +9,18 @@ is a state machine over POT EVENTS and SHOT BOUNDARIES, not over frames.
 Four pieces, feeding each other:
 
   1. PotDetector    A track that disappears inside a pocket's mouth and does not
-                    come back was potted. A track that disappears out in open
-                    table was occluded - an arm, a cue, a bad frame - and is
-                    ignored. That one distinction is the whole detector, and the
-                    pockets clicked in detect_pocket.py are what make it possible.
+                    come back CLAIMS a pot. A track that disappears out in open
+                    table was occluded - an arm, a cue, a bad frame - and claims
+                    nothing. Claims are not verdicts: a track can switch ids in a
+                    collision and die beside a pocket with its ball still rolling.
+
+                    What decides "pocketed or not" is the SETTLED TABLE: the
+                    balls of each class before the shot against the balls of
+                    each class once everything has stopped. A ball present
+                    before and absent after went down, whatever happened to the
+                    ids that carried it mid-shot; a ball that rattled out of the
+                    jaw is back on the settled table and was never potted (W-10).
+                    Claims only say WHICH POCKET - see GameSession._settle_up.
 
   2. ShotSegmenter  A shot runs from the CUE BALL being struck to every ball
                     settling again. Rules have to be applied per shot and not
@@ -57,6 +65,7 @@ RULES IMPLEMENTED HERE (the rest are in games.py, cited by row in rules.py)
     detection, W-10 a ball bouncing back out, W-11 a wedged pair.
 """
 
+import math
 from collections import Counter, deque, namedtuple
 
 import games
@@ -188,6 +197,14 @@ RACK_FRAMES = 12
 #: to had already been judged.
 SETTLE_FRAMES = POT_CONFIRM + 2
 
+#: Frames a settling may have waited for the table to clear and still have its
+#: census read. A settling held while hands cleared the table is a count nobody
+#: should score from - at 4:17 in this footage one held nine frames credited a
+#: stripe that undid a correct call - but a hold of a frame or two is the
+#: ordinary business of a player straightening up over the shot they just
+#: played, and refusing those threw away both of the pots at 7:07 and 7:29.
+CENSUS_MAX_HOLD = 3
+
 #: Frames the table must stay clear of hands and cues before its ball count is
 #: believed again.
 INTRUSION_CLEAR = 2
@@ -230,13 +247,43 @@ CUE_MISSING_FRAMES = 12
 #: wedged pair of W-11, in ball radii from the clicked pocket centre.
 WEDGE_REACH_R = 3.0
 
+#: The classes the settled census counts. The 8 is last, so that when balls go
+#: missing an ordinary ball is named before the rack-ending one is.
+CENSUS_CLASSES = (CUE, STRIPE, SOLID, EIGHT)
+
+#: How sure a pot is that the settled table proved but no pocket claim backs.
+#: The count and the census agree a ball of this class went down, so it is
+#: scored - but nothing the camera saw at a mouth says which pocket took it,
+#: and that is under M-14's bar so the call carries its dot.
+CENSUS_POT_CONFIDENCE = 0.65
+
+#: How far off a ball's last direction of travel a pocket may lie, in degrees,
+#: and still be the pocket it was heading for when its track was lost.
+HEADING_DEG = 25.0
+
+#: Where a credited pot's evidence came from.
+#:   CLAIM     a track vanished at a mouth and the settled count confirmed it -
+#:             used only when the settled census cannot be read.
+#:   CENSUS    the settled census says this class went down, and a pocket claim
+#:             says where.
+#:   INFERRED  the settled census says this class went down, and the pocket is
+#:             only the ball's last heading, or None.
+CLAIM, CENSUS, INFERRED = "claim", "census", "inferred"
+
 #: `busy` is the one field the vision layer contributes directly: a hand or a
 #: cue was over the table while this track was missing, so its disappearance
 #: has an innocent explanation that has nothing to do with a pocket.
 #: `x`, `y` are where the track was last seen - so a claim for a ball that is in
 #: fact still sitting there can be told from one that went down.
-Pot = namedtuple("Pot", "frame track cls pocket dist closed age busy x y",
-                 defaults=(None, None))
+#: `source` is one of CLAIM, CENSUS, INFERRED above.
+Pot = namedtuple("Pot", "frame track cls pocket dist closed age busy x y source",
+                 defaults=(None, None, CLAIM))
+
+#: Every track that went missing during a shot, near a pocket or not. Nothing
+#: is decided from these; they are what "which pocket" is inferred from when the
+#: settled table proves a ball went down and no claim was made at a mouth.
+#: `was` is where the track stood the frame before, which gives its heading.
+Vanish = namedtuple("Vanish", "frame track cls x y was age busy")
 
 #: A prompt the HUD must show and a player must answer. `options` are the taps
 #: that resolve it; `rule` cites the row that demanded it.
@@ -295,6 +342,7 @@ class PotDetector:
         self.missing = Counter()
         self.busy = {}          # ... and whether a hand was over the table then
         self.rejected = []      # near-misses, for the run summary
+        self.vanished = []      # every confirmed disappearance, see Vanish
 
     def update(self, tracked, labels, frame, busy=False):
         """Returns the pots confirmed on this frame (usually none).
@@ -335,6 +383,11 @@ class PotDetector:
             del self.missing[tid]
             gone.append((tid, x, y, cls, age, was, self.busy.pop(tid, False)))
 
+        crowd = len(gone) > self.mass
+        self.vanished.extend(Vanish(frame, tid, cls, int(x), int(y), was, age,
+                                    hand or crowd)
+                             for tid, x, y, cls, age, was, hand in gone)
+
         pots = []
         for tid, x, y, cls, age, was, hand in gone:
             pocket, dist = nearest_pocket(x, y, self.pockets)
@@ -349,7 +402,7 @@ class PotDetector:
                 continue                      # vanished in open table: occluded
             # The one thing still refused outright: a crowd of tracks dying
             # together is a person, and no ranking should have to sort that out.
-            if len(gone) > self.mass:
+            if crowd:
                 self.rejected.append({
                     "frame": frame, "track": tid, "cls": cls,
                     "pocket": pocket.name, "age": age,
@@ -388,7 +441,12 @@ class PotDetector:
         The number is not a probability and is not presented as one. It exists
         so that M-14 can mark the shaky calls with a dot and so our own
         debugging is free, which is exactly what the client asked it for.
+
+        A pot the settled table proved without a claim at a mouth has none of
+        that evidence to weigh, and gets CENSUS_POT_CONFIDENCE instead.
         """
+        if pot.source == INFERRED:
+            return CENSUS_POT_CONFIDENCE
         score = 0.45
         if pot.age >= self.min_age:
             score += 0.25
@@ -409,6 +467,36 @@ def nearest_pocket(x, y, pockets):
         return None, float("inf")
     best = min(pockets, key=lambda p: (p.x - x) ** 2 + (p.y - y) ** 2)
     return best, ((best.x - x) ** 2 + (best.y - y) ** 2) ** 0.5
+
+
+def heading_pocket(x, y, was, pockets, cone=HEADING_DEG):
+    """(pocket, distance) a ball was travelling toward when last seen.
+
+    "Which pocket" for a ball the settled table proves went down but whose
+    track never reached a mouth: a hard-struck ball's id dies mid-flight, and
+    its last step still points down the line it was rolling on. Of the pockets
+    ahead of it within `cone` degrees, the one that line passes closest to.
+    (None, inf) when there is no previous position to take a heading from.
+    """
+    if not pockets or was is None:
+        return None, float("inf")
+    vx, vy = x - was[0], y - was[1]
+    speed = (vx * vx + vy * vy) ** 0.5
+    if not speed:
+        return None, float("inf")
+    limit = math.cos(math.radians(cone))
+    best, best_miss, best_dist = None, float("inf"), float("inf")
+    for p in pockets:
+        dx, dy = p.x - x, p.y - y
+        dist = (dx * dx + dy * dy) ** 0.5
+        if not dist:
+            return p, 0.0
+        if (vx * dx + vy * dy) / (speed * dist) < limit:
+            continue
+        miss = abs(vx * dy - vy * dx) / speed
+        if miss < best_miss:
+            best, best_miss, best_dist = p, miss, dist
+    return best, best_dist
 
 
 class ShotSegmenter:
@@ -605,7 +693,9 @@ class GameSession:
                  mode=games.CASUAL, levels=(None, None), defence_marking=False,
                  pocket_marking=None, first_rack_confirmed=True,
                  sample_fps=None, fmt="open", break_assigns=True,
-                 innings_rule=games.SCORESHEET_INNINGS, lag_winner=0):
+                 innings_rule=games.SCORESHEET_INNINGS, lag_winner=0,
+                 started=True):
+        self.mouth = mouth
         self.pots = PotDetector(pockets, ball_r, mouth=mouth)
         self.shots = ShotSegmenter(ball_r, settle=settle)
         self.table = TableGeometry(pockets, ball_r)
@@ -624,6 +714,7 @@ class GameSession:
         self.moved_r = MOVED_R * self.ball_r
         self.candidates = []       # pots claimed since this episode started
         self.far_claims = []       # ... and vanishings too far out to claim, as a fallback
+        self.vanished = []         # ... and every track lost this episode (Vanish)
         # Both windows hold (clear, ...) pairs: `clear` is False on a frame
         # with a hand or a cue over the table, and every reading taken from
         # these windows prefers the frames where it is True. A hand does not
@@ -647,6 +738,12 @@ class GameSession:
         self.balls = 0
         self.frame = 0
         self.has_pockets = bool(pockets)
+        # A clip arrives with its table already racked and its six pockets
+        # already clicked. A camera arrives pointed at a room: someone is still
+        # racking, still placing the cue ball, still reaching across the cloth.
+        # None of that is a shot, and all of it looks exactly like one, so a
+        # live run opens UNSTARTED and nothing is judged until START GAME.
+        self.started = bool(started)
         self.all_pots = []
         self.ignored = []          # claims that did not survive a gate
         self.episodes = []         # every settling of the table, shot or not
@@ -683,6 +780,8 @@ class GameSession:
         self.wedge_dismissed = None
         self.eight_at_rest = False # W-07: was the 8 on the table last settle?
         self.cue_at_rest = False
+        if not self.started:
+            self.game.status = "SETUP - SET POCKETS, THEN START GAME"
 
     # ---- what the HUD reads ------------------------------------------------
 
@@ -806,6 +905,37 @@ class GameSession:
         self.last_facts = f
         return True
 
+    # ---- setting the table up ----------------------------------------------
+
+    def set_pockets(self, pockets):
+        """Adopt six pockets clicked after the run was already going.
+
+        A camera has no first frame worth clicking, so the pockets arrive
+        mid-run. The two things built out of them - where a ball goes down, and
+        where the rails and the head string are - are rebuilt here rather than
+        being fixed for good at construction.
+        """
+        pockets = list(pockets or [])
+        if not pockets:
+            return False
+        self.pots = PotDetector(pockets, self.ball_r, mouth=self.mouth)
+        self.table = TableGeometry(pockets, self.ball_r)
+        self.has_pockets = True
+        return True
+
+    def start(self):
+        """Leave setup and begin judging frames. Not before.
+
+        Racking, placing the cue ball and clicking the pockets are balls
+        appearing and vanishing over a table, which is what a shot is. Scoring
+        any of it would open the game with a foul nobody committed.
+        """
+        if self.started:
+            return False
+        self.started = True
+        self.game.note("start", "GAME STARTED", actor="player")
+        return True
+
     # ---- the HUD's whole command surface -----------------------------------
 
     def commands(self):
@@ -822,6 +952,13 @@ class GameSession:
           F-10  CALL FOUL greys out as soon as the next stroke begins.
         """
         game = self.game
+        if not self.started:
+            # Setup. Nothing is being judged yet, so not one of the rule
+            # buttons below means anything - offering them would be offering
+            # taps against a game that has not begun. START GAME waits on the
+            # pockets because without them nothing can be scored at all.
+            return [("set_pockets", "SET POCKETS", True),
+                    ("start_game", "START GAME", self.has_pockets)]
         out = []
         if game.defence_open:
             out.append(("defence", "MARK DEFENCE", True))
@@ -848,6 +985,11 @@ class GameSession:
             out.append(("push_out", "PUSH-OUT", True))
         out.append(("stalemate", "STALEMATE", not game.over))
         out.append(("review", "REVIEW", True))
+        if game.over:
+            # The rack is decided. Everything else stays - a final score can
+            # still be corrected, reopened and reviewed after the win, which is
+            # M-03's whole point - but the button that says so comes first.
+            out.insert(0, ("game_over", "GAME OVER", True))
         return out
 
     def command(self, name, **kw):
@@ -882,6 +1024,8 @@ class GameSession:
             return bool(getattr(game, "swap_groups", lambda: False)())
         if name == "push_out":
             return bool(getattr(game, "push_out", lambda: False)())
+        if name == "start_game":
+            return self.start()
         if name == "review":
             # M-13: BPS does not overrule. The button pulls the footage and says
             # so in the log; the players resolve it themselves with the back
@@ -956,6 +1100,7 @@ class GameSession:
         if event == "start":
             self.candidates = []
             self.far_claims = []
+            self.vanished = []
             self.rail_contact = False
             self.rail_tracks = set()
             self.wedge_dismissed = None
@@ -974,8 +1119,10 @@ class GameSession:
 
         claims = self.pots.update(tracked, labels, frame, busy=self.busy)
         far, self.pots.far = self.pots.far, []
+        vanished, self.pots.vanished = self.pots.vanished, []
         if self.shots.moving or event == "end":
             self.far_claims.extend(far)
+            self.vanished.extend(vanished)
         if claims and (self.shots.moving or event == "end"):
             self.candidates.extend(claims)
         elif claims:
@@ -1302,29 +1449,35 @@ class GameSession:
         if not fresh:
             return
         mouth = (POCKET_MOUTH * self.ball_r) ** 2
-        for pot in list(self.last_credited):
-            pocket = next((pk for pk in self.pots.pockets
-                           if pk.name == pot.pocket), None)
-            if pocket is None:
-                continue
-            if not any((p[0] - pocket.x) ** 2 + (p[1] - pocket.y) ** 2 <= mouth
-                       for p in fresh):
-                continue
-            silent = (frame - pot.frame) / self.fps <= rules.PHANTOM_SECONDS
-            self.last_credited.remove(pot)
-            if pot in self.all_pots:
-                self.all_pots.remove(pot)
-            self.phantoms += 1
-            self.settled_balls = (self.settled_balls or 0) + 1
-            # The pot changed the verdict, so taking it back means judging the
-            # shot again without it - same shooter, same everything else.
-            self._rejudge(remove=[pot.cls],
-                          why=f"{pot.cls.upper()} NOT POTTED")
-            if not silent:
-                self.game.note("note", f"{pot.cls.upper()} CAME BACK OUT OF "
-                                       f"{pot.pocket} - NOT POTTED", rule="W-10")
-            self.resting = list(positions)
+        out_of = {pk.name for pk in self.pots.pockets
+                  if any((p[0] - pk.x) ** 2 + (p[1] - pk.y) ** 2 <= mouth
+                         for p in fresh)}
+        if not out_of:
             return
+        # A pot credited to the pocket the ball came back out of first. A pot
+        # the settled census scored without a claim at a mouth has no pocket
+        # anyone saw, so it may have come back out of any of them.
+        pot = (next((p for p in self.last_credited
+                     if p.source != INFERRED and p.pocket in out_of), None)
+               or next((p for p in self.last_credited
+                        if p.source == INFERRED), None))
+        if pot is None:
+            return
+        silent = (frame - pot.frame) / self.fps <= rules.PHANTOM_SECONDS
+        self.last_credited.remove(pot)
+        if pot in self.all_pots:
+            self.all_pots.remove(pot)
+        self.phantoms += 1
+        self.settled_balls = (self.settled_balls or 0) + 1
+        # The pot changed the verdict, so taking it back means judging the
+        # shot again without it - same shooter, same everything else.
+        self._rejudge(remove=[pot.cls],
+                      why=f"{pot.cls.upper()} NOT POTTED")
+        if not silent:
+            self.game.note("note", f"{pot.cls.upper()} CAME BACK OUT OF "
+                                   f"{pot.pocket or 'A POCKET'} - NOT POTTED",
+                           rule="W-10")
+        self.resting = list(positions)
 
     # ---- M-07: the ball that was moved -------------------------------------
 
@@ -1398,6 +1551,7 @@ class GameSession:
         self.table.learn_foot(positions)
         self.game.new_rack(frame)
         self.won_at, self.candidates, self.racked_for = None, [], 0
+        self.far_claims, self.vanished = [], []
         self.pending, self.held = None, 0
         self.last_credited, self.replace_at, self.settled_at = [], None, None
         self.prompts = []
@@ -1520,6 +1674,9 @@ class GameSession:
         """
         held = self.held
         self.pending, self.held = None, 0
+        # Set before anything reads the census: how long this settling waited
+        # is part of how much its census is worth (CENSUS_MAX_HOLD).
+        self.last_hold = held
         # Overtaken while held, without one clear frame to judge from: every
         # reading below would be taken through the hand, and a ball under a hand
         # reads as a ball that MOVED or LEFT. Measured at 3:04 in this footage:
@@ -1542,7 +1699,7 @@ class GameSession:
                                   "now": _median(self._clear_counts()),
                                   "verdict": "not judged - the table was cleared"})
             self._refuse(frame, self.candidates, "the table was cleared")
-            self.candidates, self.far_claims = [], []
+            self.candidates, self.far_claims, self.vanished = [], [], []
             self.resting, self.settled_balls, self.settled_census = None, None, None
             self.game.note("note", "TABLE CLEARED - NOT A SHOT", rule="M-09",
                            quiet=True)
@@ -1556,8 +1713,17 @@ class GameSession:
         # their own, and the rearrangement test can miss a real shot outright: a
         # ball flying into a pocket at 116 px a frame was refused because the
         # others happened to come to rest near where they started.
+        #
+        # What the missing ball needs is a second witness, and a claim at a
+        # mouth is not the only one there is: the settled census naming the
+        # class that left says the same thing, and says it for the pots no
+        # track ever claimed. At 7:07 in this footage a solid went down with no
+        # claim, one ball read as moved, and the episode was refused outright -
+        # so the pot went unscored, the turn never passed, and the count stayed
+        # wrong for the rest of the rack.
         lost = (self.settled_balls or 0) - _median(self._clear_counts())
-        if lost >= 1 and self.candidates:
+        if lost >= 1 and (self.candidates
+                          or self._census_gone(lost, self.settled_census)):
             need = min(need, len(moved))
         record = {"frame": frame, "moved": len(moved), "was": self.settled_balls,
                   "now": _median(self._clear_counts()), "held": held,
@@ -1582,7 +1748,6 @@ class GameSession:
 
         self.before = self.settled_balls
         self.before_census = Counter(self.settled_census or {})
-        self.last_hold = held
         self.settled_at = frame          # M-02 counts from here - shots only
         shooter = self.game.turn
         self.game.shot_started(frame)
@@ -1604,6 +1769,7 @@ class GameSession:
         if self.game.over and self.won_at is None:
             self.won_at = frame
         self._rest()
+        record["corrected"] = self._reconcile_score()
         # A potted object ball stays down; a potted cue ball is fished out and
         # put back, so the table will hold one more than it does at this moment.
         self.settled_balls = (_median(self._clear_counts()) +
@@ -1615,6 +1781,43 @@ class GameSession:
         if not self.game.struck:
             self.resting, self.settled_balls = None, None
         return credited
+
+    def _reconcile_score(self):
+        """Check the score against what the table still holds (8-ball).
+
+        The scoreboard's version of what _settle_up does for a single shot. A
+        pot can be missed outright - a ball that drops while a hand crosses the
+        frame, or on an episode that was never judged a shot at all - and the
+        score then stays one short for the rest of the rack, with nothing in
+        the pipeline able to notice. The table notices: seven balls to a group,
+        and whatever is not on the cloth is down.
+
+        This is also what keeps the rack-ending call honest, which is the
+        expensive half. The 8 is judged against the shooter's count as it stood
+        BEFORE the shot - W-01's win and W-02's early 8 are the same event told
+        apart by that number - so a player who has really cleared their group
+        but is credited with five loses a rack they just won. Correcting the
+        score as each shot settles is what stops that, one settling before the
+        8 goes down.
+
+        Read only off an unambiguous table: from the frames of the window with
+        nothing leaning over it, not held long for a hand (CENSUS_MAX_HOLD),
+        and with every ball the count sees carrying exactly one label. A
+        flickering vote pushes the classes past the count, and
+        then the reading is skipped rather than guessed at - the next settling
+        will be clean, and being a shot late costs nothing here.
+        """
+        game = self.game
+        if (self.discipline != games.EIGHT_BALL or game.over or not game.struck
+                or self.last_hold > CENSUS_MAX_HOLD
+                or not any(ok for ok, _c in self.census)):
+            return []
+        seen = self._clear_census(max)
+        if (sum(seen.get(cls, 0) for cls in CENSUS_CLASSES)
+                != _median(self._clear_counts())):
+            return []
+        return game.reconcile_score({STRIPE: seen.get(STRIPE, 0),
+                                     SOLID: seen.get(SOLID, 0)})
 
     def _facts(self, credited, moved):
         """Everything the rules layer needs about this shot, honestly tristated.
@@ -1642,7 +1845,12 @@ class GameSession:
         """
         movers = self.shots.movers
         classes = set(movers.values())
-        objects_moved = bool(classes & {STRIPE, SOLID, EIGHT})
+        # A ball that went down was hit, whatever the tracker managed to see
+        # move. At 7:07 in this footage a solid was potted on a shot where only
+        # the cue ball was ever matched between frames, and F-05 called "no
+        # ball hit" against the player who had just potted their own ball.
+        potted = any(p.cls in (STRIPE, SOLID, EIGHT) for p in credited)
+        objects_moved = bool(classes & {STRIPE, SOLID, EIGHT}) or potted
         saw_cue = CUE in classes
         hit_object = None
         if objects_moved:
@@ -1683,7 +1891,10 @@ class GameSession:
             contact_conf=round(confidence, 2),
             moved=len(moved),
             rail_balls=rail_balls,
-            eight_pocket=eight.pocket if eight else None,
+            # W-03 can lose a rack on this, so only a pocket the 8 was SEEN
+            # going into counts - never one inferred from its heading.
+            eight_pocket=(eight.pocket if eight and eight.source != INFERRED
+                          else None),
             off_conf=off_conf,
         )
 
@@ -1727,17 +1938,32 @@ class GameSession:
         return gone[:unexplained], self.OFF_TABLE_CONFIDENCE
 
     def _settle_up(self, frame):
-        """Decide which of this shot's claims were real, by counting the table.
+        """Decide what this shot put down, by comparing the settled tables.
 
         A disappearing track is weak evidence. At 4.9 fps a struck ball crosses
         far more than the tracker's search radius, so its id dies mid-flight and
-        is reborn elsewhere - and if it died near a pocket it claims a pot that
-        never happened. What is NOT weak evidence is how many balls are on the
-        table once everything has stopped: a pot means one fewer, permanently,
-        and a broken track means the same number.
+        is reborn elsewhere, and two balls colliding can swap ids outright - so
+        a track that died beside a pocket may belong to a ball still rolling,
+        and the ball that went down may have died as a track nowhere near one.
 
-        So the claims are only ever as good as the drop in the settled count,
-        and the best-explained ones get the benefit of it.
+        What is NOT weak evidence is the table once everything has stopped, and
+        it answers both halves of the question without asking a single track to
+        survive the shot:
+
+          HOW MANY   the settled count before against the settled count now.
+          WHICH      the settled census, class by class: a stripe on the table
+                     before and not after went down, whoever carried its id.
+
+        So the census is the authority on what was pocketed, and the claims
+        made at the mouths are only asked the one thing they are good for -
+        WHICH POCKET (_attribute). A ball that rattled out of the jaw is back
+        on the settled table, in both the count and the census, and is simply
+        never credited (W-10).
+
+        The claim ranking the census replaced is still here, for the settlings
+        whose census cannot be read (_census_gone): then the claims are only
+        ever as good as the drop in the count, and the best-explained ones get
+        the benefit of it.
         """
         after = _median(self._clear_counts())
         before = self.before if self.before is not None else after
@@ -1747,92 +1973,175 @@ class GameSession:
                          f"table still holds {after} balls (was {before})")
             return []
 
-        # The count says how many balls went down; the ranking says which claims
-        # get them. Weak claims are not thrown away here - a hard-struck ball
-        # leaves weak evidence behind, because it outran the tracker.
-        #
         # A claim for a ball that is still sitting where it was last seen is not
         # a pot, however well it ranks. A ball resting by the top-middle pocket
         # blinks out under passing hands all through this footage, and at 5:32
         # that blink took the credit for a stripe that went down elsewhere.
         still = [c for c in self.candidates if self._still_there(c)]
         self._refuse(frame, still, "ball still sitting where it was")
-        ranked = sorted([c for c in self.candidates if c not in still],
-                        key=self.pots.rank)
-        credited, refused = ranked[:dropped], ranked[dropped:]
-        # The table lost more than the near claims explain: a ball reborn as a
-        # new track mid-flight vanished short of the mouth (POT_FAR_MOUTH). Only
-        # a YOUNG track can be that - an established one that dies out there
-        # lost its id, not its ball. At 7:30 and 8:12 in this footage exactly
-        # that, filling a count that was a ball out, called two scratches on a
-        # cue ball that never left the cloth.
-        if len(credited) < dropped:
-            # Nor is a fallback ever the cue ball while the cue ball is in
-            # plain view: at 7:30 a one-frame cue track 119 px from a pocket
-            # called a scratch with the cue sitting on the cloth.
-            cue_here = self.last_seen.get(CUE, -1) >= self.frame - self.shots.settle
-            far = sorted([c for c in self.far_claims if c.age < POT_MIN_AGE
-                          and not (c.cls == CUE and cue_here)
-                          and not self._still_there(c)],
-                         key=self.pots.rank)
-            credited += far[:dropped - len(credited)]
-        if len(credited) < dropped:
-            credited += self._by_class(frame, dropped - len(credited), credited)
-        self._refuse(frame, refused,
+        near = sorted([c for c in self.candidates if c not in still],
+                      key=self.pots.rank)
+        # A ball reborn as a new track mid-flight can vanish short of the mouth
+        # (POT_FAR_MOUTH). Only a YOUNG track can be that - an established one
+        # that dies out there lost its id, not its ball. At 7:30 and 8:12 in
+        # this footage exactly that, filling a count that was a ball out, called
+        # two scratches on a cue ball that never left the cloth. Nor is it ever
+        # the cue ball while the cue ball is in plain view: at 7:30 a one-frame
+        # cue track 119 px from a pocket called a scratch with the cue on the
+        # cloth.
+        cue_here = self.last_seen.get(CUE, -1) >= self.frame - self.shots.settle
+        far = sorted([c for c in self.far_claims if c.age < POT_MIN_AGE
+                      and not (c.cls == CUE and cue_here)
+                      and not self._still_there(c)],
+                     key=self.pots.rank)
+
+        gone = self._census_gone(dropped)
+        credited, spent = ([], set()) if gone is None else \
+            self._attribute(frame, gone, near + far)
+        # The census only sees labelled balls. Balls the count lost beyond what
+        # it explains went down unlabelled, so only a claim that is unlabelled
+        # too can account for them - a claim carrying a class the census says
+        # is all still on the table is the id-switch this comparison exists to
+        # see through. Unless the census before the shot was itself missing
+        # balls: then a labelled ball may have gone down that it never counted.
+        blind = gone is None or before > sum(
+            (self.before_census or {}).get(c, 0) for c in CENSUS_CLASSES)
+        contradicted = []
+        for c in near + far:
+            if id(c) in spent:
+                continue
+            if not blind and c.cls != UNKNOWN:
+                contradicted.append(c)
+            elif len(credited) < dropped:
+                credited.append(c)
+                spent.add(id(c))
+        self._refuse(frame, [c for c in near if c in contradicted],
+                     "settled census still shows every ball of that class")
+        self._refuse(frame, [c for c in near
+                             if id(c) not in spent and c not in contradicted],
                      f"table still holds {after} balls (was {before})")
         credited = self._cue_under_another_label(credited)
         self.all_pots.extend(credited)
         return credited
 
-    def _by_class(self, frame, missing, credited):
-        """A ball the table has lost that no vanishing track can explain.
+    def _census_gone(self, dropped, before=None):
+        """The classes the settled table lost, or None when it cannot say.
 
-        At 4:29 in this footage a solid went down and nothing claimed it: the
-        track carrying it died 232 px from the nearest pocket, far outside any
-        mouth, because a hard-struck ball at 4.9 fps is reborn as a new id
-        mid-flight and then lost again. Thirteen settlings over the match lost a
-        ball with nothing credited, and every one of them is a pot that never
-        reached the score.
+        Before the shot, three stripes, a solid, the 8 and the cue; after it,
+        three stripes, the 8 and the cue. The solid went down - at 4:29 in this
+        footage exactly that ball's track died 232 px from the nearest pocket
+        and nothing claimed it, and at 5:32 an id that died beside a pocket
+        scored a stripe that was still rolling.
 
-        What the camera still has is the CLASSIFIER: three stripes, a solid, the
-        8 and the cue before the shot; three stripes, the 8 and the cue after.
-        The solid is gone, whoever was carrying its id. That is enough to score
-        it, and not enough to say where it went - so the pocket is left unknown
-        and the claim carries a young track's confidence, which M-14 marks with
-        a dot.
+        The most generous reading of what is still on the table: a class only
+        counts as missing when it is missing in EVERY clear frame of the window.
+        A stripe read as a solid for one frame looks exactly like a stripe that
+        went down, and over this match that flicker credited eleven stripes,
+        two of them balls the rack could not even hold.
 
-        The evidence has to be clean, because this is the weakest claim the
-        system makes - there is no vanishing to point at, only arithmetic. So
-        the shot must have been judged the moment it settled, on a table with
-        nothing leaning over it, with exactly ONE ball unaccounted for and
-        exactly ONE class short to explain it. Anything else - a settling held
-        while hands cleared, two balls gone at once, two classes disagreeing -
-        is a count nobody should score from: at 4:17 a settling held nine
-        frames for a hand credited a stripe that undid a correct call.
+        And it is only read at all off clean evidence: a settling waited on for
+        no longer than CENSUS_MAX_HOLD, read from the frames of the window with
+        nothing leaning over the table, and agreeing with the count. More
+        classes short than balls gone is a label that changed, not a ball that
+        left, and the census is not believed.
 
-        The 8 is tried last, so an ordinary ball explains a drop before the
-        rack-ending one does. It is in the list because the alternative is
-        worse: at the end of rack 1 the 8 went down on a shot nothing claimed,
-        the count said so, and the miss surfaced two shots later as W-07's
-        "knocked off the table" - a rack ended against the wrong player, on an
-        inference, long after the shot that really decided it.
+        ONE clear frame is enough, and demanding more was expensive. The count
+        this census is checked against is taken from the same clear frames, so
+        holding the census to a stricter standard than the count only means the
+        weaker evidence decides alone. At 10:10 in this footage a cue ball ran
+        the length of the table, outjumped the tracker, and died beside the top
+        left pocket under a player's arm; the clear frame in that window showed
+        the cue ball sitting on the cloth and the 8 gone from it, and refusing
+        to read it scored a scratch that never happened, left the 8 that really
+        went down unexplained, and handed away the rack.
+
+        `before` is the table this one is compared with, defaulting to the
+        census taken before the shot being judged. _settle passes the last
+        settling's census directly, because it asks this question before it has
+        decided there was a shot at all.
         """
-        # The most generous reading of what is still on the table: a class only
-        # counts as missing when it is missing in EVERY clear frame of the
-        # window. A stripe read as a solid for one frame looks exactly like a
-        # stripe that went down, and over this match that flicker credited
-        # eleven stripes, two of them balls the rack could not even hold.
-        if missing != 1 or self.last_hold or not all(ok for ok, _p in self.window):
-            return []
+        before = self.before_census if before is None else before
+        if (before is None or self.last_hold > CENSUS_MAX_HOLD
+                or not any(ok for ok, _c in self.census)):
+            return None
         now = self._clear_census(max)
-        before = Counter(self.before_census or {})
-        for p in credited:            # already explained by a real claim
-            before[p.cls] -= 1
-        short = [cls for cls in (STRIPE, SOLID, CUE, EIGHT)
-                 if before.get(cls, 0) - now.get(cls, 0) > 0]
-        if len(short) != 1:
-            return []
-        return [Pot(frame, -1, short[0], None, 0.0, 0.0, 0, False, None, None)]
+        gone = [cls for cls in CENSUS_CLASSES
+                for _ in range(max(0, before.get(cls, 0) - now.get(cls, 0)))]
+        return gone if len(gone) <= dropped else None
+
+    def _attribute(self, frame, gone, claims):
+        """Put each ball the census lost into a pocket. Returns (pots, spent).
+
+        This is the only thing the in-motion evidence is still asked, and it is
+        the part that can afford to be wrong: the census has already decided the
+        ball is down, and a pocket mistaken for its neighbour changes a replay
+        label, not the score. Best evidence first:
+
+          1. a claim at a mouth carrying the same class;
+          2. a claim at a mouth from a track too young for its label to mean
+             anything - the class is the census's, the pocket is the claim's.
+             Never for the 8, whose pocket W-03 can lose a rack on;
+          3. the ball's last heading, from the track of that class that was
+             lost during the shot (heading_pocket);
+          4. no pocket at all.
+
+        `spent` holds the ids of the claims used, so none is spent twice.
+        """
+        spent, pots, open_ = set(), [None] * len(gone), []
+        for i, cls in enumerate(gone):
+            match = next((c for c in claims
+                          if id(c) not in spent and c.cls == cls), None)
+            if match is None:
+                open_.append(i)
+                continue
+            spent.add(id(match))
+            pots[i] = match._replace(source=CENSUS)
+        for i in list(open_):
+            if gone[i] == EIGHT:
+                continue
+            match = next((c for c in claims
+                          if id(c) not in spent and c.age < POT_MIN_AGE), None)
+            if match is None:
+                continue
+            spent.add(id(match))
+            pots[i] = match._replace(cls=gone[i], source=CENSUS)
+            open_.remove(i)
+        lost = set()
+        for i in open_:
+            pots[i] = self._heading(frame, gone[i], lost)
+        return pots, spent
+
+    def _heading(self, frame, cls, lost):
+        """Step 3 and 4 of _attribute: a pot for `cls` from where it was going.
+
+        Of the tracks of that class lost this shot, a clear-table one first and
+        then the latest - the ball that went down is the last to disappear. A
+        track lost in open table with no heading into any pocket, or one whose
+        ball is still sitting where it was lost, lost its id and not its ball.
+        """
+        best = None
+        for v in self.vanished:
+            if v.cls != cls or id(v) in lost:
+                continue
+            pocket, dist = heading_pocket(v.x, v.y, v.was, self.pots.pockets)
+            if pocket is None:
+                pocket, dist = nearest_pocket(v.x, v.y, self.pots.pockets)
+                if dist > self.pots.far_reach:
+                    continue
+            closed = (nearest_pocket(v.was[0], v.was[1], [pocket])[1] - dist
+                      if v.was else 0.0)
+            pot = Pot(v.frame, v.track, cls, pocket.name, round(dist, 1),
+                      round(closed, 1), v.age, v.busy, v.x, v.y, INFERRED)
+            if self._still_there(pot):
+                continue
+            key = (v.busy, -v.frame)
+            if best is None or key < best[0]:
+                best = (key, pot, v)
+        if best is None:
+            return Pot(frame, -1, cls, None, 0.0, 0.0, 0, False, None, None,
+                       INFERRED)
+        lost.add(id(best[2]))
+        return best[1]
 
     def _still_there(self, claim):
         """Was this claim a ball at rest that the settled table still shows?"""

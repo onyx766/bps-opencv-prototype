@@ -479,10 +479,27 @@
     },
     {
       "seq": 29,
+      "frame": 2110,
+      "clock": "07:07",
+      "rack": 1,
+      "shot": 20,
+      "type": "pot",
+      "text": "PLAYER 2 CONTINUES",
+      "rule": null,
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2110,
+        "clock": "07:07"
+      }
+    },
+    {
+      "seq": 30,
       "frame": 2218,
       "clock": "07:29",
       "rack": 1,
-      "shot": 20,
+      "shot": 21,
       "type": "turn",
       "text": "MISS - PLAYER 1 TO SHOOT",
       "rule": "M-01",
@@ -495,11 +512,28 @@
       }
     },
     {
-      "seq": 30,
+      "seq": 31,
+      "frame": 2218,
+      "clock": "07:29",
+      "rack": 1,
+      "shot": 21,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 7/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2218,
+        "clock": "07:29"
+      }
+    },
+    {
+      "seq": 32,
       "frame": 2243,
       "clock": "07:34",
       "rack": 1,
-      "shot": 20,
+      "shot": 21,
       "type": "note",
       "text": "WAITING FOR THE CUE BALL",
       "rule": "M-08",
@@ -512,11 +546,11 @@
       }
     },
     {
-      "seq": 31,
+      "seq": 33,
       "frame": 2251,
       "clock": "07:36",
       "rack": 1,
-      "shot": 20,
+      "shot": 21,
       "type": "note",
       "text": "CUE BALL BACK",
       "rule": "M-08",
@@ -529,11 +563,11 @@
       }
     },
     {
-      "seq": 32,
+      "seq": 34,
       "frame": 2427,
       "clock": "08:12",
       "rack": 1,
-      "shot": 21,
+      "shot": 22,
       "type": "pot",
       "text": "PLAYER 1 CONTINUES",
       "rule": null,
@@ -543,6 +577,108 @@
       "clip": {
         "frame": 2427,
         "clock": "08:12"
+      }
+    },
+    {
+      "seq": 35,
+      "frame": 2686,
+      "clock": "09:04",
+      "rack": 1,
+      "shot": 23,
+      "type": "turn",
+      "text": "MISS - PLAYER 2 TO SHOOT",
+      "rule": "M-01",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2686,
+        "clock": "09:04"
+      }
+    },
+    {
+      "seq": 36,
+      "frame": 2808,
+      "clock": "09:29",
+      "rack": 1,
+      "shot": 24,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.3,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2808,
+        "clock": "09:29"
+      }
+    },
+    {
+      "seq": 37,
+      "frame": 2808,
+      "clock": "09:29",
+      "rack": 1,
+      "shot": 24,
+      "type": "turn",
+      "text": "MISS - PLAYER 1 TO SHOOT",
+      "rule": "M-01",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2808,
+        "clock": "09:29"
+      }
+    },
+    {
+      "seq": 38,
+      "frame": 2929,
+      "clock": "09:54",
+      "rack": 1,
+      "shot": 25,
+      "type": "foul",
+      "text": "FOUL - NO BALL HIT - BALL IN HAND",
+      "rule": "F-05",
+      "confidence": null,
+      "actor": "system",
+      "player": 0,
+      "clip": {
+        "frame": 2929,
+        "clock": "09:54"
+      }
+    },
+    {
+      "seq": 39,
+      "frame": 2929,
+      "clock": "09:54",
+      "rack": 1,
+      "shot": 25,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 5/7 STRIPE OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2929,
+        "clock": "09:54"
+      }
+    },
+    {
+      "seq": 40,
+      "frame": 3009,
+      "clock": "10:10",
+      "rack": 1,
+      "shot": 26,
+      "type": "win",
+      "text": "PLAYER 2 WINS - RAN THE TABLE",
+      "rule": "W-01",
+      "confidence": null,
+      "actor": "system",
+      "player": 1,
+      "clip": {
+        "frame": 3009,
+        "clock": "10:10"
       }
     }
   ],
@@ -597,6 +733,57 @@
         "frame": 1829,
         "clock": "06:10"
       }
+    },
+    {
+      "seq": 31,
+      "frame": 2218,
+      "clock": "07:29",
+      "rack": 1,
+      "shot": 21,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 7/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2218,
+        "clock": "07:29"
+      }
+    },
+    {
+      "seq": 36,
+      "frame": 2808,
+      "clock": "09:29",
+      "rack": 1,
+      "shot": 24,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.3,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2808,
+        "clock": "09:29"
+      }
+    },
+    {
+      "seq": 39,
+      "frame": 2929,
+      "clock": "09:54",
+      "rack": 1,
+      "shot": 25,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 5/7 STRIPE OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 2929,
+        "clock": "09:54"
+      }
     }
   ],
   "final": false,
@@ -617,16 +804,16 @@
       "SOLIDS"
     ],
     "score": [
-      4,
-      5
+      6,
+      7
     ],
     "racks": [
       0,
-      0
+      1
     ],
     "race": null,
     "fouls": [
-      3,
+      4,
       0
     ],
     "defences": [
@@ -637,29 +824,29 @@
       0,
       0
     ],
-    "shots": 21,
-    "innings": 8,
+    "shots": 26,
+    "innings": 9,
     "analytics": [
       {
-        "shots": 10,
-        "TSR": 0.4,
-        "CRR": 0.7,
+        "shots": 12,
+        "TSR": 0.333,
+        "CRR": 0.75,
         "SDR": 0.0
       },
       {
-        "shots": 11,
-        "TSR": 0.364,
+        "shots": 14,
+        "TSR": 0.429,
         "CRR": 1.0,
         "SDR": 0.0
       }
     ],
-    "winner": null,
-    "status": "PLAYER 1 CONTINUES",
-    "pots": 12,
+    "winner": "Player 2",
+    "status": "PLAYER 2 WINS - RAN THE TABLE",
+    "pots": 15,
     "phantoms": 0,
     "replaced": 0,
     "reviews": 0,
     "unexplained": 2,
-    "busy_frames": 730
+    "busy_frames": 1005
   }
 }

@@ -1093,6 +1093,46 @@ class EightBallGame(BaseGame):
             return
         self.potted[cls] += 1
 
+    #: How sure a ball counted off the settled table is. Under M-14's bar, so
+    #: the correction carries its dot: nobody watched this ball go in, and the
+    #: evidence is only that it is no longer on the cloth.
+    SCORE_FROM_TABLE_CONFIDENCE = 0.65
+
+    def reconcile_score(self, seen):
+        """Read the score off what the table still holds.
+
+        A pot the camera missed is still a ball that is GONE, and the settled
+        table goes on saying so long after the shot that took it: seven stripes
+        to a rack, four on the cloth, three down. So the score does not depend
+        on catching every pot in the act - it is checked against what is left,
+        every time the table settles.
+
+        Only ever upward. One settled reading is weaker evidence than a ball
+        watched going in, so this fills gaps and never takes a scored ball
+        back; M-04 and W-10 are what take pots back, and they do it on the
+        evidence that a ball is on the cloth again.
+
+        `seen` is how many balls of each group the settled table still shows.
+        Returns [(class, how many it added)], for the log and the caller.
+        """
+        fixed = []
+        for cls in (STRIPE, SOLID):
+            if cls not in seen:
+                continue
+            down = GROUP_SIZE - seen[cls]
+            if down <= self.potted[cls]:
+                continue
+            fixed.append((cls, down - self.potted[cls]))
+            self.potted[cls] = down
+        for cls, missed in fixed:
+            # Quiet: the shot that just settled has its own verdict on the
+            # status line, and this is bookkeeping alongside it.
+            self.note("pot", f"SCORE CORRECTED - {GROUP_SIZE - seen[cls]}/"
+                             f"{GROUP_SIZE} {cls.upper()} OFF THE TABLE, "
+                             f"{missed} NOT SEEN GOING IN",
+                      confidence=self.SCORE_FROM_TABLE_CONFIDENCE, quiet=True)
+        return fixed
+
     def _assign(self, shooter, cls):
         """W-08. Groups are inferred here and nowhere else."""
         self.group[shooter] = cls
