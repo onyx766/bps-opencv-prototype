@@ -1,3 +1,8 @@
+# Video/image assets are deliberately not tracked - game.mp4 alone is 620MB,
+# too big for a normal git history. find_default_video() in main.py looks for
+# game.mp4, test.mp4 or input.mp4 in this folder and prints exactly that path
+# if none is found - supply the clip separately (a Drive link + this exact
+# filename dropped in here is the usual way) rather than adding it to git.
 *.mp4
 *.jpg
 *.png

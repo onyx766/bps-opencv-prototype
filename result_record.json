@@ -680,6 +680,23 @@
         "frame": 3009,
         "clock": "10:10"
       }
+    },
+    {
+      "seq": 41,
+      "frame": 3094,
+      "clock": "10:27",
+      "rack": 1,
+      "shot": 26,
+      "type": "final",
+      "text": "FINAL SCORE CONFIRMED",
+      "rule": "M-03",
+      "confidence": null,
+      "actor": "player",
+      "player": null,
+      "clip": {
+        "frame": 3094,
+        "clock": "10:27"
+      }
     }
   ],
   "flagged": [
@@ -786,7 +803,7 @@
       }
     }
   ],
-  "final": false,
+  "final": true,
   "reopened": 0,
   "summary": {
     "discipline": "8ball",
@@ -847,6 +864,6 @@
     "replaced": 0,
     "reviews": 0,
     "unexplained": 2,
-    "busy_frames": 1005
+    "busy_frames": 954
   }
 }

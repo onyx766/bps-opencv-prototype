@@ -121,8 +121,21 @@ LIVE_MAX_MISSES = 60
 TABLE_MEMORY = "bps_table.json"
 
 WINDOW = "BPS - HUD"
-#: The live preview is shown at half size; clicks are mapped back through this.
+#: Fallback preview scale, used only if the dynamic target below can't run.
 PREVIEW_SCALE = 0.5
+#: The on-screen window is sized to land near this width, whatever the source
+#: resolution actually is - a 640x480 webcam is scaled UP to look as big as a
+#: 1920x1080 clip's preview did, instead of inheriting a flat 0.5x that made a
+#: small camera frame tiny. Clamped below so a huge source isn't blown up past
+#: readability and a laptop screen still fits the whole board+bar+table.
+TARGET_PREVIEW_W = 1280
+MAX_PREVIEW_H = 900
+MIN_PREVIEW_SCALE, MAX_PREVIEW_SCALE = 0.35, 1.8
+#: Resolution asked of a live camera on open. Most webcams default-negotiate
+#: to something small like 640x480 unless asked for more; a camera that can't
+#: do this just keeps its native size; the real, DELIVERED size is always
+#: read back from the frame itself, never assumed from this request.
+LIVE_CAPTURE_W, LIVE_CAPTURE_H = 1920, 1080
 
 
 def find_default_video(folder):
@@ -135,6 +148,32 @@ def find_default_video(folder):
         if name.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
             return os.path.join(folder, name)
     return None
+
+
+class quiet_probe:
+    """Swallow OpenCV's own backend chatter while speculatively opening indices.
+
+    Probing index 2 when only 0 and 1 exist - or index 2 of a synced stereo
+    pair that only answers alone with zero bytes (the known ELP wiring quirk)
+    - is not a failure, it is the probe doing its job. Left alone, OpenCV's
+    C++ logger prints a WARN/ERROR line per backend per empty index anyway,
+    which reads as a wall of breakage on exactly the rig where it is expected
+    and harmless. This silences OpenCV's own logger only around a probe - the
+    real, non-speculative open of the camera actually being used is left at
+    the normal level, so a genuine failure there still explains itself.
+    """
+
+    def __enter__(self):
+        self._api = getattr(cv2, "utils", None) and getattr(cv2.utils, "logging", None)
+        self._prev = self._api.getLogLevel() if self._api else None
+        if self._api:
+            self._api.setLogLevel(self._api.LOG_LEVEL_SILENT)
+        return self
+
+    def __exit__(self, *exc):
+        if self._api:
+            self._api.setLogLevel(self._prev)
+        return False
 
 
 def open_camera(index):
@@ -162,14 +201,15 @@ def find_cameras(limit=CAMERA_PROBE):
     no frames. One real frame is the only proof worth showing in a menu.
     """
     found = []
-    for index in range(limit):
-        cap = open_camera(index)
-        if cap is None:
-            continue
-        ok, frame = cap.read()
-        cap.release()
-        if ok:
-            found.append((index, frame.shape[1], frame.shape[0]))
+    with quiet_probe():
+        for index in range(limit):
+            cap = open_camera(index)
+            if cap is None:
+                continue
+            ok, frame = cap.read()
+            cap.release()
+            if ok:
+                found.append((index, frame.shape[1], frame.shape[0]))
     return found
 
 
@@ -180,12 +220,13 @@ def first_camera():
     tried on each empty one, so the usual case - the one webcam, on 0 - is
     asked for directly and the noisy sweep is kept for when that fails.
     """
-    cap = open_camera(0)
-    if cap is not None:
-        ok, _frame = cap.read()
-        cap.release()
-        if ok:
-            return 0
+    with quiet_probe():
+        cap = open_camera(0)
+        if cap is not None:
+            ok, _frame = cap.read()
+            cap.release()
+            if ok:
+                return 0
     found = find_cameras()
     return found[0][0] if found else None
 
@@ -1114,7 +1155,8 @@ def key_tap(key, session):
 def on_mouse(event, x, y, _flags, ui):
     if event != cv2.EVENT_LBUTTONUP:
         return
-    X, Y = x / PREVIEW_SCALE, y / PREVIEW_SCALE
+    scale = ui.get("scale", PREVIEW_SCALE)
+    X, Y = x / scale, y / scale
     for x0, y0, x1, y1, kind, kw in reversed(ui["rects"]):
         if x0 <= X <= x1 and y0 <= Y <= y1:
             ui["taps"].append((kind, kw))
@@ -1380,6 +1422,12 @@ def main():
                      f"already have it. Cameras that answered: "
                      f"{[i for i, _w, _h in find_cameras()] or 'none'}")
         in_path = f"camera:{index}"
+        # Ask for a bigger capture than most webcams default-negotiate to. A
+        # camera that can't do this just ignores the request and keeps its
+        # native size - nothing downstream assumes this was granted, since W
+        # and H are always read back from the delivered frame, not from here.
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, LIVE_CAPTURE_W)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LIVE_CAPTURE_H)
         # A rendered run cannot be tapped and a live one has every reason to
         # be watched: the window IS the point of pointing a camera at a table.
         args.show = True
@@ -1475,6 +1523,14 @@ def main():
     bar_h = max(40, int(round(H * BAR_FRACTION)))
     play_fps = max(1.0, src_fps / args.stride)
 
+    # Land near TARGET_PREVIEW_W wide, but not so tall the window runs off a
+    # laptop screen: whichever bound is tighter wins, then both are clamped so
+    # a small camera frame is scaled UP into something worth looking at and a
+    # huge one isn't blown up past readability.
+    full_h = H + board_h + bar_h
+    preview_scale = min(TARGET_PREVIEW_W / W, MAX_PREVIEW_H / full_h)
+    preview_scale = max(MIN_PREVIEW_SCALE, min(MAX_PREVIEW_SCALE, preview_scale))
+
     defence = (args.defence_marking == "on" or
                (args.defence_marking == "auto"
                 and args.mode in (games.LEAGUE, games.PRACTICE)))
@@ -1534,7 +1590,7 @@ def main():
     registry = None if args.no_id else BallClassRegistry()
     review = Review(play_fps, W, auto_close=not args.show)
     scripted = parse_taps(args.taps)
-    ui = {"rects": [], "taps": []}
+    ui = {"rects": [], "taps": [], "scale": preview_scale}
     if args.show:
         cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)
         cv2.setMouseCallback(WINDOW, on_mouse, ui)
@@ -1691,8 +1747,9 @@ def main():
                 writer.write(out)
 
             if args.show:
-                preview = cv2.resize(out, None, fx=PREVIEW_SCALE, fy=PREVIEW_SCALE,
-                                     interpolation=cv2.INTER_AREA)
+                interp = cv2.INTER_AREA if preview_scale <= 1.0 else cv2.INTER_LINEAR
+                preview = cv2.resize(out, None, fx=preview_scale, fy=preview_scale,
+                                     interpolation=interp)
                 cv2.imshow(WINDOW, preview)
                 key_code = cv2.waitKey(30 if paused else 1)
                 if key_code != -1:

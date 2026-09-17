@@ -1,0 +1,17 @@
+# BPS prototype runtime deps. Only two third-party packages are imported
+# anywhere in this repo (main.py, logic.py, games.py, rules.py, server.py,
+# detect_pocket.py, track_identity.py, ball_class.py, tuner.py) - everything
+# else used is Python stdlib.
+#
+# opencv-python, NOT opencv-python-headless: detect_pocket.py's SET POCKETS /
+# pocket-click flow needs real GUI bindings (cv2.namedWindow,
+# cv2.setMouseCallback) to draw the clickable window; headless has neither
+# and detect_pocket.py degrades to a "cannot be clicked" message instead of
+# opening one.
+opencv-python>=4.8
+numpy>=1.24
+
+# Dev-only, not required to run main.py or server.py: runs test_rules.py's
+# unittest-style suite (`pytest test_rules.py` or `python -m unittest
+# test_rules`).
+# pytest>=7
