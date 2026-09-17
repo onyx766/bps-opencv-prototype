@@ -693,7 +693,9 @@ class GameSession:
                  mode=games.CASUAL, levels=(None, None), defence_marking=False,
                  pocket_marking=None, first_rack_confirmed=True,
                  sample_fps=None, fmt="open", break_assigns=True,
-                 innings_rule=games.SCORESHEET_INNINGS, lag_winner=0):
+                 innings_rule=games.SCORESHEET_INNINGS, lag_winner=0,
+                 started=True):
+        self.mouth = mouth
         self.pots = PotDetector(pockets, ball_r, mouth=mouth)
         self.shots = ShotSegmenter(ball_r, settle=settle)
         self.table = TableGeometry(pockets, ball_r)
@@ -736,6 +738,12 @@ class GameSession:
         self.balls = 0
         self.frame = 0
         self.has_pockets = bool(pockets)
+        # A clip arrives with its table already racked and its six pockets
+        # already clicked. A camera arrives pointed at a room: someone is still
+        # racking, still placing the cue ball, still reaching across the cloth.
+        # None of that is a shot, and all of it looks exactly like one, so a
+        # live run opens UNSTARTED and nothing is judged until START GAME.
+        self.started = bool(started)
         self.all_pots = []
         self.ignored = []          # claims that did not survive a gate
         self.episodes = []         # every settling of the table, shot or not
@@ -772,6 +780,8 @@ class GameSession:
         self.wedge_dismissed = None
         self.eight_at_rest = False # W-07: was the 8 on the table last settle?
         self.cue_at_rest = False
+        if not self.started:
+            self.game.status = "SETUP - SET POCKETS, THEN START GAME"
 
     # ---- what the HUD reads ------------------------------------------------
 
@@ -895,6 +905,37 @@ class GameSession:
         self.last_facts = f
         return True
 
+    # ---- setting the table up ----------------------------------------------
+
+    def set_pockets(self, pockets):
+        """Adopt six pockets clicked after the run was already going.
+
+        A camera has no first frame worth clicking, so the pockets arrive
+        mid-run. The two things built out of them - where a ball goes down, and
+        where the rails and the head string are - are rebuilt here rather than
+        being fixed for good at construction.
+        """
+        pockets = list(pockets or [])
+        if not pockets:
+            return False
+        self.pots = PotDetector(pockets, self.ball_r, mouth=self.mouth)
+        self.table = TableGeometry(pockets, self.ball_r)
+        self.has_pockets = True
+        return True
+
+    def start(self):
+        """Leave setup and begin judging frames. Not before.
+
+        Racking, placing the cue ball and clicking the pockets are balls
+        appearing and vanishing over a table, which is what a shot is. Scoring
+        any of it would open the game with a foul nobody committed.
+        """
+        if self.started:
+            return False
+        self.started = True
+        self.game.note("start", "GAME STARTED", actor="player")
+        return True
+
     # ---- the HUD's whole command surface -----------------------------------
 
     def commands(self):
@@ -911,6 +952,13 @@ class GameSession:
           F-10  CALL FOUL greys out as soon as the next stroke begins.
         """
         game = self.game
+        if not self.started:
+            # Setup. Nothing is being judged yet, so not one of the rule
+            # buttons below means anything - offering them would be offering
+            # taps against a game that has not begun. START GAME waits on the
+            # pockets because without them nothing can be scored at all.
+            return [("set_pockets", "SET POCKETS", True),
+                    ("start_game", "START GAME", self.has_pockets)]
         out = []
         if game.defence_open:
             out.append(("defence", "MARK DEFENCE", True))
@@ -937,6 +985,11 @@ class GameSession:
             out.append(("push_out", "PUSH-OUT", True))
         out.append(("stalemate", "STALEMATE", not game.over))
         out.append(("review", "REVIEW", True))
+        if game.over:
+            # The rack is decided. Everything else stays - a final score can
+            # still be corrected, reopened and reviewed after the win, which is
+            # M-03's whole point - but the button that says so comes first.
+            out.insert(0, ("game_over", "GAME OVER", True))
         return out
 
     def command(self, name, **kw):
@@ -971,6 +1024,8 @@ class GameSession:
             return bool(getattr(game, "swap_groups", lambda: False)())
         if name == "push_out":
             return bool(getattr(game, "push_out", lambda: False)())
+        if name == "start_game":
+            return self.start()
         if name == "review":
             # M-13: BPS does not overrule. The button pulls the footage and says
             # so in the log; the players resolve it themselves with the back

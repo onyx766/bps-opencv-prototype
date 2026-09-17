@@ -32,7 +32,9 @@ THE HUD, AND WHY IT LOOKS THE WAY IT DOES
                   GameSession.commands(): MARK DEFENCE only between shots
                   (H-02), END TIME OUT only while one runs (H-05), UNDO gone once
                   the score is final (M-03), CALL FOUL greyed once the next
-                  stroke begins (F-10).
+                  stroke begins (F-10). A camera run opens in setup, where the
+                  only two taps that exist are SET POCKETS and START GAME, and
+                  GAME OVER appears the moment the rack is decided.
     prompts       The questions the camera must not answer alone: confirm
                   groups with two thumbnails (M-06), a wedged pair (W-11), the
                   first rack on a new table (M-09), a league illegal break
@@ -61,6 +63,7 @@ Keys in --show:  d defence  t time out  e end time out  x cancel time out
                  u undo  k confirm final  o reopen  f call foul  s stalemate
                  r review  l call loss (unmarked 8)  z declare frozen
                  g swap groups  p push-out (Masters)
+                 c set pockets  b start game  v game over
                  1/2/3 answer a prompt  space pause  q/ESC quit
 
 League manual options:
@@ -185,6 +188,37 @@ def first_camera():
             return 0
     found = find_cameras()
     return found[0][0] if found else None
+
+
+def pick_pockets_now(frame, path, source):
+    """Freeze this frame and take the six clicks. Pockets, or None if cancelled.
+
+    The live counterpart to detect_pocket.calibrate(): the same window and the
+    same six clicks, but on the frame that was on screen when the button was
+    tapped rather than on whatever the camera happened to see first.
+    """
+    points = detect_pocket.select_pockets(frame.copy())
+    if points is None:
+        print("  POCKETS cancelled - the old ones still stand", flush=True)
+        return None
+    pockets = detect_pocket.name_pockets(points)
+    H, W = frame.shape[:2]
+    detect_pocket.save_pockets(path, pockets, W, H, source)
+    print(f"  POCKETS set, saved to {os.path.basename(path)}: "
+          + ", ".join(f"{p.name}({p.x},{p.y})" for p in pockets), flush=True)
+    return pockets
+
+
+def flush_camera(cap, live, n=LIVE_WARMUP):
+    """Drop the frames a camera buffered while a modal window was up.
+
+    Clicking six pockets takes as long as it takes, and the camera does not
+    stop feeding while it happens. Without this the run resumes on a backlog
+    of frames from before the pockets existed.
+    """
+    if live:
+        for _ in range(n):
+            cap.read()
 
 
 def _ask(prompt):
@@ -687,7 +721,8 @@ def button_bar(W, height, session):
         y0, y1 = pad, height - pad
         # The transient buttons - defence and a running time-out - are the ones
         # the client wants noticed while they exist, so they carry the accent.
-        accent = enabled and cid in ("defence", "end_timeout")
+        accent = enabled and cid in ("defence", "end_timeout", "start_game",
+                                     "game_over")
         fill = BOARD_GREEN if accent else BUTTON_BG if enabled else BUTTON_OFF
         cv2.rectangle(bar, (x0, y0), (x1, y1), fill, -1)
         cv2.rectangle(bar, (x0, y0), (x1, y1),
@@ -1053,7 +1088,11 @@ class Review:
 KEYMAP = {"d": "defence", "t": "timeout", "e": "end_timeout",
           "x": "cancel_timeout", "u": "undo", "k": "confirm", "o": "reopen",
           "f": "foul", "s": "stalemate", "r": "review", "l": "call_loss",
-          "z": "frozen", "g": "swap_groups", "p": "push_out"}
+          "z": "frozen", "g": "swap_groups", "p": "push_out",
+          # The three that are about the run rather than the rules. They are
+          # buttons first - a camera run is driven by tapping - but a key for
+          # each costs nothing and main.py's tap path is the same either way.
+          "c": "set_pockets", "b": "start_game", "v": "game_over"}
 
 
 def key_tap(key, session):
@@ -1400,11 +1439,28 @@ def main():
     pockets_path = (pocket_file if os.path.isabs(pocket_file)
                     else os.path.join(here, pocket_file))
     if not args.no_pockets:
-        pockets = detect_pocket.calibrate(frame, pockets_path, video=in_path,
-                                          force=args.repick_pockets)
-        if pockets is None:
-            sys.exit("Pocket selection cancelled - nothing was processed.\n"
-                     "Run again, or use --no-pockets to skip it.")
+        if live:
+            # A camera's first frame is the worst one to click: the table may
+            # not be in shot yet, let alone racked, and whoever is setting up
+            # is not at the keyboard. So the six clicks wait behind the SET
+            # POCKETS button, on whatever frame is up when it is tapped. A
+            # calibration already saved for this camera is reused - the button
+            # is how it gets replaced, and --repick-pockets forces the issue.
+            if not args.repick_pockets:
+                pockets = detect_pocket.load_pockets(pockets_path, W, H)
+            if pockets:
+                print(f"Pockets: {len(pockets)} loaded from {pockets_path}"
+                      f"  (tap SET POCKETS to click them again)")
+            else:
+                print("Pockets: not set yet - tap SET POCKETS once the table "
+                      "is in shot, then START GAME")
+        else:
+            pockets = detect_pocket.calibrate(frame, pockets_path,
+                                              video=in_path,
+                                              force=args.repick_pockets)
+            if pockets is None:
+                sys.exit("Pocket selection cancelled - nothing was processed.\n"
+                         "Run again, or use --no-pockets to skip it.")
 
     cal = calibrate(frame, tuple(args.felt_low), tuple(args.felt_high), shrink=18,
                     ball_r=args.ball_r, pockets=pockets, block=args.pocket_block)
@@ -1442,7 +1498,10 @@ def main():
                                 sample_fps=play_fps, fmt=args.fmt,
                                 break_assigns=args.break_assigns == "on",
                                 innings_rule=args.innings,
-                                lag_winner=args.lag_winner - 1)
+                                lag_winner=args.lag_winner - 1,
+                                # A clip is already a game; a camera is a room
+                                # someone is still racking a table in.
+                                started=not live)
     game = session.game
     print(f"Game:   {args.game}  {args.mode}  {args.fmt} format  defence marking "
           f"{'on' if defence else 'off'}  pocket marking "
@@ -1494,6 +1553,41 @@ def main():
     first = True
     paused = False
     current = None
+    finish = False
+
+    def do_tap(tap):
+        """One tap. Returns True when it did something.
+
+        Three of the buttons are about the RUN rather than the rules, and they
+        are handled here because they are about things only this file holds:
+        the pockets, the calibration built on them, and whether the loop keeps
+        going. Everything else goes straight through to the rules, unchanged.
+        """
+        nonlocal pockets, cal, finish
+        name = tap[1].get("name") if tap[0] == "command" else None
+        if name == "set_pockets":
+            picked = pick_pockets_now(current[0], pockets_path, in_path)
+            if picked is None:
+                return False
+            pockets = picked
+            # The table mask has the pocket holes cut out of it, so it is built
+            # from the pockets and has to be rebuilt with them.
+            cal = calibrate(current[0], tuple(args.felt_low),
+                            tuple(args.felt_high), shrink=18,
+                            ball_r=args.ball_r, pockets=pockets,
+                            block=args.pocket_block)
+            session.set_pockets(pockets)
+            flush_camera(cap, live)
+            return True
+        if name == "game_over":
+            # M-03: the score becomes final, which is exactly what CONFIRM
+            # FINAL does - this is that tap plus the end of the run.
+            if not session.game.record.final:
+                session.command("confirm")
+            finish = True
+            return True
+        return run_tap(session, review, tap)
+
     try:
         while True:
             advanced = False
@@ -1539,7 +1633,18 @@ def main():
                              for tid, x, y, r in tracked]
                 id_counts.append(sum(1 for it in items if it[4] is not None))
 
-                for pot in session.update(tracked, labels, idx, intruding=hand):
+                # Before START GAME nothing is judged: racking a table, placing
+                # the cue ball and reaching across the cloth are balls arriving
+                # and vanishing, which is precisely what a shot is.
+                if session.started:
+                    pots = session.update(tracked, labels, idx, intruding=hand)
+                else:
+                    # Setup still has a clock. Nothing is judged, but a note
+                    # written now - START GAME itself - belongs on the frame it
+                    # was tapped on rather than on frame zero.
+                    session.frame = idx
+                    pots = []
+                for pot in pots:
                     print(f"  POT   frame {idx}  {pot.cls.upper()} in "
                           f"{pot.pocket or 'unknown pocket'} [{pot.source}] "
                           f"(track {pot.track}, {pot.dist:.0f} px out, "
@@ -1561,12 +1666,12 @@ def main():
 
             while scripted and scripted[0][0] <= idx:
                 _at, tap = scripted.pop(0)
-                done = run_tap(session, review, tap)
+                done = do_tap(tap)
                 print(f"  TAP   frame {idx}  {describe_tap(tap)}"
                       f"{'' if done else '  (not available now)'}", flush=True)
             while ui["taps"]:
                 tap = ui["taps"].pop(0)
-                done = run_tap(session, review, tap)
+                done = do_tap(tap)
                 print(f"  TAP   frame {idx}  {describe_tap(tap)}"
                       f"{'' if done else '  (not available now)'}", flush=True)
 
@@ -1607,6 +1712,10 @@ def main():
                 print(f"  {processed} frames  |  {where}  "
                       f"|  {counts[-1]} balls, "
                       f"{id_counts[-1]} named  |  {fps_now:.1f} fps", flush=True)
+
+            if finish:
+                print("GAME OVER - finishing the run.")
+                break
 
             if advanced and args.frames and processed >= args.frames:
                 break
