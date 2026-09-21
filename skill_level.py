@@ -14,7 +14,7 @@ the module that implements it. Three constraints, all locked:
 `assert_clean()` at the bottom enforces the third one over every string this
 module can produce, and main.py runs it at startup.
 
-THE RANGES AND CHARTS come from the league's team manual, section 4 ("Games
+THE RANGES AND CHARTS come from the league's team manual, section 4 ("Games123
 Must Win" and "Points Required To Win"). By client decision they replace the
 CSV's "1-7 everywhere": the charts are built on the real ranges and do not
 survive being squeezed into another one.
