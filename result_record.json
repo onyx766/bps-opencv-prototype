@@ -3,8 +3,25 @@
   "events": [
     {
       "seq": 1,
-      "frame": 112,
-      "clock": "00:22",
+      "frame": 11,
+      "clock": "00:02",
+      "rack": 1,
+      "shot": 0,
+      "type": "note",
+      "text": "WAITING FOR THE CUE BALL",
+      "rule": "M-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 11,
+        "clock": "00:02"
+      }
+    },
+    {
+      "seq": 2,
+      "frame": 293,
+      "clock": "00:58",
       "rack": 1,
       "shot": 1,
       "type": "turn",
@@ -14,14 +31,14 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 112,
-        "clock": "00:22"
+        "frame": 293,
+        "clock": "00:58"
       }
     },
     {
-      "seq": 2,
-      "frame": 251,
-      "clock": "00:50",
+      "seq": 3,
+      "frame": 373,
+      "clock": "01:14",
       "rack": 1,
       "shot": 2,
       "type": "turn",
@@ -31,67 +48,84 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 251,
-        "clock": "00:50"
+        "frame": 373,
+        "clock": "01:14"
       }
     },
     {
-      "seq": 3,
-      "frame": 346,
-      "clock": "01:10",
+      "seq": 4,
+      "frame": 373,
+      "clock": "01:14",
       "rack": 1,
+      "shot": 2,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 2/7 STRIPE OFF THE TABLE, 2 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 373,
+        "clock": "01:14"
+      }
+    },
+    {
+      "seq": 5,
+      "frame": 402,
+      "clock": "01:20",
+      "rack": 2,
+      "shot": 2,
+      "type": "rack",
+      "text": "RACK 2 - PLAYER 2 BREAKS",
+      "rule": "M-09",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 402,
+        "clock": "01:20"
+      }
+    },
+    {
+      "seq": 6,
+      "frame": 565,
+      "clock": "01:53",
+      "rack": 2,
       "shot": 3,
-      "type": "assign",
-      "text": "PLAYER 1 TAKES STRIPES",
+      "type": "break",
+      "text": "PLAYER 2 BROKE - TABLE OPEN",
       "rule": "W-08",
       "confidence": null,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 346,
-        "clock": "01:10"
+        "frame": 565,
+        "clock": "01:53"
       }
     },
     {
-      "seq": 4,
-      "frame": 475,
-      "clock": "01:36",
-      "rack": 1,
-      "shot": 4,
-      "type": "foul",
-      "text": "FOUL - SCRATCH - BALL IN HAND",
-      "rule": "F-01",
-      "confidence": null,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 475,
-        "clock": "01:36"
-      }
-    },
-    {
-      "seq": 5,
-      "frame": 534,
-      "clock": "01:48",
-      "rack": 1,
-      "shot": 5,
+      "seq": 7,
+      "frame": 565,
+      "clock": "01:53",
+      "rack": 2,
+      "shot": 3,
       "type": "pot",
-      "text": "PLAYER 2 CONTINUES",
+      "text": "SCORE CORRECTED - 2/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
       "rule": null,
-      "confidence": null,
+      "confidence": 0.65,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 534,
-        "clock": "01:48"
+        "frame": 565,
+        "clock": "01:53"
       }
     },
     {
-      "seq": 6,
-      "frame": 638,
-      "clock": "02:09",
-      "rack": 1,
-      "shot": 6,
+      "seq": 8,
+      "frame": 619,
+      "clock": "02:03",
+      "rack": 2,
+      "shot": 4,
       "type": "turn",
       "text": "MISS - PLAYER 1 TO SHOOT",
       "rule": "M-01",
@@ -99,16 +133,109 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 638,
-        "clock": "02:09"
+        "frame": 619,
+        "clock": "02:03"
       }
     },
     {
-      "seq": 7,
-      "frame": 722,
-      "clock": "02:26",
-      "rack": 1,
-      "shot": 7,
+      "seq": 9,
+      "frame": 679,
+      "clock": "02:15",
+      "rack": 2,
+      "shot": 5,
+      "type": "assign",
+      "text": "PLAYER 1 TAKES SOLIDS",
+      "rule": "W-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 679,
+        "clock": "02:15"
+      },
+      "reverted": true
+    },
+    {
+      "seq": 10,
+      "frame": 679,
+      "clock": "02:15",
+      "rack": 2,
+      "shot": 5,
+      "type": "prompt",
+      "text": "CONFIRM GROUPS",
+      "rule": "M-06",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 679,
+        "clock": "02:15"
+      }
+    },
+    {
+      "seq": 11,
+      "frame": 725,
+      "clock": "02:25",
+      "rack": 2,
+      "shot": 5,
+      "type": "assign",
+      "text": "PLAYER 1 TAKES SOLIDS",
+      "rule": "W-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 725,
+        "clock": "02:25"
+      },
+      "reverted": true
+    },
+    {
+      "seq": 12,
+      "frame": 725,
+      "clock": "02:25",
+      "rack": 2,
+      "shot": 5,
+      "type": "assign",
+      "text": "GROUPS CONFIRMED - PLAYER 1 ON SOLIDS",
+      "rule": "M-06",
+      "confidence": null,
+      "actor": "player",
+      "player": null,
+      "clip": {
+        "frame": 725,
+        "clock": "02:25"
+      },
+      "reverted": true
+    },
+    {
+      "seq": 13,
+      "frame": 769,
+      "clock": "02:33",
+      "rack": 2,
+      "shot": 5,
+      "type": "revert",
+      "text": "SOLID NOT POTTED",
+      "rule": "M-03",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 769,
+        "clock": "02:33"
+      },
+      "undone": [
+        9,
+        11,
+        12
+      ]
+    },
+    {
+      "seq": 14,
+      "frame": 769,
+      "clock": "02:33",
+      "rack": 2,
+      "shot": 6,
       "type": "turn",
       "text": "MISS - PLAYER 2 TO SHOOT",
       "rule": "M-01",
@@ -116,84 +243,152 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 722,
-        "clock": "02:26"
+        "frame": 769,
+        "clock": "02:33"
       }
     },
     {
-      "seq": 8,
-      "frame": 825,
-      "clock": "02:47",
-      "rack": 1,
+      "seq": 15,
+      "frame": 769,
+      "clock": "02:33",
+      "rack": 2,
+      "shot": 6,
+      "type": "note",
+      "text": "SOLID CAME BACK OUT OF TM - NOT POTTED",
+      "rule": "W-10",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 769,
+        "clock": "02:33"
+      }
+    },
+    {
+      "seq": 16,
+      "frame": 781,
+      "clock": "02:36",
+      "rack": 2,
+      "shot": 7,
+      "type": "assign",
+      "text": "PLAYER 2 TAKES STRIPES",
+      "rule": "W-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 781,
+        "clock": "02:36"
+      }
+    },
+    {
+      "seq": 17,
+      "frame": 781,
+      "clock": "02:36",
+      "rack": 2,
+      "shot": 7,
+      "type": "prompt",
+      "text": "CONFIRM GROUPS",
+      "rule": "M-06",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 781,
+        "clock": "02:36"
+      }
+    },
+    {
+      "seq": 18,
+      "frame": 822,
+      "clock": "02:44",
+      "rack": 2,
+      "shot": 7,
+      "type": "assign",
+      "text": "PLAYER 2 TAKES SOLIDS",
+      "rule": "W-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 822,
+        "clock": "02:44"
+      }
+    },
+    {
+      "seq": 19,
+      "frame": 822,
+      "clock": "02:44",
+      "rack": 2,
+      "shot": 7,
+      "type": "assign",
+      "text": "GROUPS CONFIRMED - PLAYER 2 ON SOLIDS",
+      "rule": "M-06",
+      "confidence": null,
+      "actor": "player",
+      "player": null,
+      "clip": {
+        "frame": 822,
+        "clock": "02:44"
+      }
+    },
+    {
+      "seq": 20,
+      "frame": 832,
+      "clock": "02:46",
+      "rack": 2,
+      "shot": 7,
+      "type": "note",
+      "text": "CUE BALL BACK",
+      "rule": "M-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 832,
+        "clock": "02:46"
+      }
+    },
+    {
+      "seq": 21,
+      "frame": 895,
+      "clock": "02:59",
+      "rack": 2,
+      "shot": 7,
+      "type": "note",
+      "text": "WAITING FOR THE CUE BALL",
+      "rule": "M-08",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 895,
+        "clock": "02:59"
+      }
+    },
+    {
+      "seq": 22,
+      "frame": 949,
+      "clock": "03:09",
+      "rack": 2,
       "shot": 8,
-      "type": "pot",
-      "text": "PLAYER 2 CONTINUES",
-      "rule": null,
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 825,
-        "clock": "02:47"
-      }
-    },
-    {
-      "seq": 9,
-      "frame": 860,
-      "clock": "02:54",
-      "rack": 1,
-      "shot": 9,
-      "type": "pot",
-      "text": "PLAYER 2 CONTINUES",
-      "rule": null,
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 860,
-        "clock": "02:54"
-      }
-    },
-    {
-      "seq": 10,
-      "frame": 929,
-      "clock": "03:08",
-      "rack": 1,
-      "shot": 10,
-      "type": "pot",
-      "text": "PLAYER 2 CONTINUES",
-      "rule": null,
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 929,
-        "clock": "03:08"
-      }
-    },
-    {
-      "seq": 11,
-      "frame": 1041,
-      "clock": "03:31",
-      "rack": 1,
-      "shot": 11,
       "type": "review",
       "text": "REVIEW - FIRST CONTACT UNCERTAIN",
       "rule": "F-09",
-      "confidence": 0.21,
+      "confidence": 0.14,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 1041,
-        "clock": "03:31"
+        "frame": 949,
+        "clock": "03:09"
       }
     },
     {
-      "seq": 12,
-      "frame": 1041,
-      "clock": "03:31",
-      "rack": 1,
-      "shot": 11,
+      "seq": 23,
+      "frame": 949,
+      "clock": "03:09",
+      "rack": 2,
+      "shot": 8,
       "type": "turn",
       "text": "MISS - PLAYER 1 TO SHOOT",
       "rule": "M-01",
@@ -201,373 +396,169 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 1041,
-        "clock": "03:31"
+        "frame": 949,
+        "clock": "03:09"
       }
     },
     {
-      "seq": 13,
-      "frame": 1096,
-      "clock": "03:42",
-      "rack": 1,
-      "shot": 12,
+      "seq": 24,
+      "frame": 949,
+      "clock": "03:09",
+      "rack": 2,
+      "shot": 8,
       "type": "pot",
-      "text": "PLAYER 1 CONTINUES",
+      "text": "SCORE CORRECTED - 3/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
       "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 949,
+        "clock": "03:09"
+      }
+    },
+    {
+      "seq": 25,
+      "frame": 1004,
+      "clock": "03:20",
+      "rack": 2,
+      "shot": 9,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.21,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 1004,
+        "clock": "03:20"
+      }
+    },
+    {
+      "seq": 26,
+      "frame": 1004,
+      "clock": "03:20",
+      "rack": 2,
+      "shot": 9,
+      "type": "turn",
+      "text": "MISS - PLAYER 2 TO SHOOT",
+      "rule": "M-01",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 1004,
+        "clock": "03:20"
+      }
+    },
+    {
+      "seq": 27,
+      "frame": 1065,
+      "clock": "03:33",
+      "rack": 2,
+      "shot": 10,
+      "type": "turn",
+      "text": "MISS - PLAYER 1 TO SHOOT",
+      "rule": "M-01",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 1065,
+        "clock": "03:33"
+      }
+    },
+    {
+      "seq": 28,
+      "frame": 1096,
+      "clock": "03:39",
+      "rack": 2,
+      "shot": 11,
+      "type": "turn",
+      "text": "MISS - PLAYER 2 TO SHOOT",
+      "rule": "M-01",
       "confidence": null,
       "actor": "system",
       "player": null,
       "clip": {
         "frame": 1096,
-        "clock": "03:42"
-      }
-    },
-    {
-      "seq": 14,
-      "frame": 1293,
-      "clock": "04:22",
-      "rack": 1,
-      "shot": 13,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.21,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1293,
-        "clock": "04:22"
-      }
-    },
-    {
-      "seq": 15,
-      "frame": 1293,
-      "clock": "04:22",
-      "rack": 1,
-      "shot": 13,
-      "type": "turn",
-      "text": "OPPONENT'S BALL POTTED - PLAYER 2 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1293,
-        "clock": "04:22"
-      }
-    },
-    {
-      "seq": 16,
-      "frame": 1369,
-      "clock": "04:37",
-      "rack": 1,
-      "shot": 14,
-      "type": "turn",
-      "text": "MISS - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1369,
-        "clock": "04:37"
-      }
-    },
-    {
-      "seq": 17,
-      "frame": 1462,
-      "clock": "04:56",
-      "rack": 1,
-      "shot": 15,
-      "type": "turn",
-      "text": "MISS - PLAYER 2 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1462,
-        "clock": "04:56"
-      }
-    },
-    {
-      "seq": 18,
-      "frame": 1604,
-      "clock": "05:25",
-      "rack": 1,
-      "shot": 16,
-      "type": "turn",
-      "text": "MISS - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1604,
-        "clock": "05:25"
-      }
-    },
-    {
-      "seq": 19,
-      "frame": 1667,
-      "clock": "05:38",
-      "rack": 1,
-      "shot": 17,
-      "type": "foul",
-      "text": "FOUL - SCRATCH - BALL IN HAND",
-      "rule": "F-01",
-      "confidence": null,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 1667,
-        "clock": "05:38"
-      }
-    },
-    {
-      "seq": 20,
-      "frame": 1679,
-      "clock": "05:40",
-      "rack": 1,
-      "shot": 17,
-      "type": "note",
-      "text": "WAITING FOR THE CUE BALL",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1679,
-        "clock": "05:40"
-      }
-    },
-    {
-      "seq": 21,
-      "frame": 1770,
-      "clock": "05:59",
-      "rack": 1,
-      "shot": 17,
-      "type": "note",
-      "text": "CUE BALL BACK",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1770,
-        "clock": "05:59"
-      }
-    },
-    {
-      "seq": 22,
-      "frame": 1829,
-      "clock": "06:10",
-      "rack": 1,
-      "shot": 18,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.21,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1829,
-        "clock": "06:10"
-      }
-    },
-    {
-      "seq": 23,
-      "frame": 1829,
-      "clock": "06:10",
-      "rack": 1,
-      "shot": 18,
-      "type": "turn",
-      "text": "MISS - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 1829,
-        "clock": "06:10"
-      }
-    },
-    {
-      "seq": 24,
-      "frame": 2008,
-      "clock": "06:47",
-      "rack": 1,
-      "shot": 19,
-      "type": "foul",
-      "text": "FOUL - SCRATCH - BALL IN HAND",
-      "rule": "F-01",
-      "confidence": null,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 2008,
-        "clock": "06:47"
-      }
-    },
-    {
-      "seq": 25,
-      "frame": 2020,
-      "clock": "06:49",
-      "rack": 1,
-      "shot": 19,
-      "type": "note",
-      "text": "WAITING FOR THE CUE BALL",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2020,
-        "clock": "06:49"
-      }
-    },
-    {
-      "seq": 26,
-      "frame": 2030,
-      "clock": "06:51",
-      "rack": 1,
-      "shot": 19,
-      "type": "note",
-      "text": "CUE BALL BACK",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2030,
-        "clock": "06:51"
-      }
-    },
-    {
-      "seq": 27,
-      "frame": 2047,
-      "clock": "06:55",
-      "rack": 1,
-      "shot": 19,
-      "type": "note",
-      "text": "WAITING FOR THE CUE BALL",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2047,
-        "clock": "06:55"
-      }
-    },
-    {
-      "seq": 28,
-      "frame": 2112,
-      "clock": "07:08",
-      "rack": 1,
-      "shot": 19,
-      "type": "note",
-      "text": "CUE BALL BACK",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2112,
-        "clock": "07:08"
+        "clock": "03:39"
       }
     },
     {
       "seq": 29,
-      "frame": 2110,
-      "clock": "07:07",
-      "rack": 1,
-      "shot": 20,
+      "frame": 1096,
+      "clock": "03:39",
+      "rack": 2,
+      "shot": 11,
       "type": "pot",
-      "text": "PLAYER 2 CONTINUES",
-      "rule": null,
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2110,
-        "clock": "07:07"
-      }
-    },
-    {
-      "seq": 30,
-      "frame": 2218,
-      "clock": "07:29",
-      "rack": 1,
-      "shot": 21,
-      "type": "turn",
-      "text": "MISS - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2218,
-        "clock": "07:29"
-      }
-    },
-    {
-      "seq": 31,
-      "frame": 2218,
-      "clock": "07:29",
-      "rack": 1,
-      "shot": 21,
-      "type": "pot",
-      "text": "SCORE CORRECTED - 7/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "text": "SCORE CORRECTED - 4/7 STRIPE OFF THE TABLE, 1 NOT SEEN GOING IN",
       "rule": null,
       "confidence": 0.65,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2218,
-        "clock": "07:29"
+        "frame": 1096,
+        "clock": "03:39"
+      }
+    },
+    {
+      "seq": 30,
+      "frame": 1176,
+      "clock": "03:55",
+      "rack": 2,
+      "shot": 12,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.14,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 1176,
+        "clock": "03:55"
+      }
+    },
+    {
+      "seq": 31,
+      "frame": 1176,
+      "clock": "03:55",
+      "rack": 2,
+      "shot": 12,
+      "type": "turn",
+      "text": "MISS - PLAYER 1 TO SHOOT",
+      "rule": "M-01",
+      "confidence": null,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 1176,
+        "clock": "03:55"
       }
     },
     {
       "seq": 32,
-      "frame": 2243,
-      "clock": "07:34",
-      "rack": 1,
-      "shot": 21,
-      "type": "note",
-      "text": "WAITING FOR THE CUE BALL",
-      "rule": "M-08",
-      "confidence": null,
+      "frame": 1258,
+      "clock": "04:11",
+      "rack": 2,
+      "shot": 13,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.14,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2243,
-        "clock": "07:34"
+        "frame": 1258,
+        "clock": "04:11"
       }
     },
     {
       "seq": 33,
-      "frame": 2251,
-      "clock": "07:36",
-      "rack": 1,
-      "shot": 21,
-      "type": "note",
-      "text": "CUE BALL BACK",
-      "rule": "M-08",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2251,
-        "clock": "07:36"
-      }
-    },
-    {
-      "seq": 34,
-      "frame": 2427,
-      "clock": "08:12",
-      "rack": 1,
-      "shot": 22,
+      "frame": 1258,
+      "clock": "04:11",
+      "rack": 2,
+      "shot": 13,
       "type": "pot",
       "text": "PLAYER 1 CONTINUES",
       "rule": null,
@@ -575,171 +566,86 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2427,
-        "clock": "08:12"
-      }
-    },
-    {
-      "seq": 35,
-      "frame": 2686,
-      "clock": "09:04",
-      "rack": 1,
-      "shot": 23,
-      "type": "turn",
-      "text": "MISS - PLAYER 2 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2686,
-        "clock": "09:04"
-      }
-    },
-    {
-      "seq": 36,
-      "frame": 2808,
-      "clock": "09:29",
-      "rack": 1,
-      "shot": 24,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.3,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2808,
-        "clock": "09:29"
-      }
-    },
-    {
-      "seq": 37,
-      "frame": 2808,
-      "clock": "09:29",
-      "rack": 1,
-      "shot": 24,
-      "type": "turn",
-      "text": "MISS - PLAYER 1 TO SHOOT",
-      "rule": "M-01",
-      "confidence": null,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2808,
-        "clock": "09:29"
-      }
-    },
-    {
-      "seq": 38,
-      "frame": 2929,
-      "clock": "09:54",
-      "rack": 1,
-      "shot": 25,
-      "type": "foul",
-      "text": "FOUL - NO BALL HIT - BALL IN HAND",
-      "rule": "F-05",
-      "confidence": null,
-      "actor": "system",
-      "player": 0,
-      "clip": {
-        "frame": 2929,
-        "clock": "09:54"
-      }
-    },
-    {
-      "seq": 39,
-      "frame": 2929,
-      "clock": "09:54",
-      "rack": 1,
-      "shot": 25,
-      "type": "pot",
-      "text": "SCORE CORRECTED - 5/7 STRIPE OFF THE TABLE, 1 NOT SEEN GOING IN",
-      "rule": null,
-      "confidence": 0.65,
-      "actor": "system",
-      "player": null,
-      "clip": {
-        "frame": 2929,
-        "clock": "09:54"
-      }
-    },
-    {
-      "seq": 40,
-      "frame": 3009,
-      "clock": "10:10",
-      "rack": 1,
-      "shot": 26,
-      "type": "win",
-      "text": "PLAYER 2 WINS - RAN THE TABLE",
-      "rule": "W-01",
-      "confidence": null,
-      "actor": "system",
-      "player": 1,
-      "clip": {
-        "frame": 3009,
-        "clock": "10:10"
-      }
-    },
-    {
-      "seq": 41,
-      "frame": 3094,
-      "clock": "10:27",
-      "rack": 1,
-      "shot": 26,
-      "type": "final",
-      "text": "FINAL SCORE CONFIRMED",
-      "rule": "M-03",
-      "confidence": null,
-      "actor": "player",
-      "player": null,
-      "clip": {
-        "frame": 3094,
-        "clock": "10:27"
+        "frame": 1258,
+        "clock": "04:11"
       }
     }
   ],
   "flagged": [
     {
-      "seq": 11,
-      "frame": 1041,
-      "clock": "03:31",
+      "seq": 4,
+      "frame": 373,
+      "clock": "01:14",
       "rack": 1,
-      "shot": 11,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.21,
+      "shot": 2,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 2/7 STRIPE OFF THE TABLE, 2 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 1041,
-        "clock": "03:31"
+        "frame": 373,
+        "clock": "01:14"
       }
     },
     {
-      "seq": 14,
-      "frame": 1293,
-      "clock": "04:22",
-      "rack": 1,
-      "shot": 13,
-      "type": "review",
-      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
-      "rule": "F-09",
-      "confidence": 0.21,
+      "seq": 7,
+      "frame": 565,
+      "clock": "01:53",
+      "rack": 2,
+      "shot": 3,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 2/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 1293,
-        "clock": "04:22"
+        "frame": 565,
+        "clock": "01:53"
       }
     },
     {
       "seq": 22,
-      "frame": 1829,
-      "clock": "06:10",
-      "rack": 1,
-      "shot": 18,
+      "frame": 949,
+      "clock": "03:09",
+      "rack": 2,
+      "shot": 8,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.14,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 949,
+        "clock": "03:09"
+      }
+    },
+    {
+      "seq": 24,
+      "frame": 949,
+      "clock": "03:09",
+      "rack": 2,
+      "shot": 8,
+      "type": "pot",
+      "text": "SCORE CORRECTED - 3/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "rule": null,
+      "confidence": 0.65,
+      "actor": "system",
+      "player": null,
+      "clip": {
+        "frame": 949,
+        "clock": "03:09"
+      }
+    },
+    {
+      "seq": 25,
+      "frame": 1004,
+      "clock": "03:20",
+      "rack": 2,
+      "shot": 9,
       "type": "review",
       "text": "REVIEW - FIRST CONTACT UNCERTAIN",
       "rule": "F-09",
@@ -747,63 +653,63 @@
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 1829,
-        "clock": "06:10"
+        "frame": 1004,
+        "clock": "03:20"
       }
     },
     {
-      "seq": 31,
-      "frame": 2218,
-      "clock": "07:29",
-      "rack": 1,
-      "shot": 21,
+      "seq": 29,
+      "frame": 1096,
+      "clock": "03:39",
+      "rack": 2,
+      "shot": 11,
       "type": "pot",
-      "text": "SCORE CORRECTED - 7/7 SOLID OFF THE TABLE, 1 NOT SEEN GOING IN",
+      "text": "SCORE CORRECTED - 4/7 STRIPE OFF THE TABLE, 1 NOT SEEN GOING IN",
       "rule": null,
       "confidence": 0.65,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2218,
-        "clock": "07:29"
+        "frame": 1096,
+        "clock": "03:39"
       }
     },
     {
-      "seq": 36,
-      "frame": 2808,
-      "clock": "09:29",
-      "rack": 1,
-      "shot": 24,
+      "seq": 30,
+      "frame": 1176,
+      "clock": "03:55",
+      "rack": 2,
+      "shot": 12,
       "type": "review",
       "text": "REVIEW - FIRST CONTACT UNCERTAIN",
       "rule": "F-09",
-      "confidence": 0.3,
+      "confidence": 0.14,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2808,
-        "clock": "09:29"
+        "frame": 1176,
+        "clock": "03:55"
       }
     },
     {
-      "seq": 39,
-      "frame": 2929,
-      "clock": "09:54",
-      "rack": 1,
-      "shot": 25,
-      "type": "pot",
-      "text": "SCORE CORRECTED - 5/7 STRIPE OFF THE TABLE, 1 NOT SEEN GOING IN",
-      "rule": null,
-      "confidence": 0.65,
+      "seq": 32,
+      "frame": 1258,
+      "clock": "04:11",
+      "rack": 2,
+      "shot": 13,
+      "type": "review",
+      "text": "REVIEW - FIRST CONTACT UNCERTAIN",
+      "rule": "F-09",
+      "confidence": 0.14,
       "actor": "system",
       "player": null,
       "clip": {
-        "frame": 2929,
-        "clock": "09:54"
+        "frame": 1258,
+        "clock": "04:11"
       }
     }
   ],
-  "final": true,
+  "final": false,
   "reopened": 0,
   "summary": {
     "discipline": "8ball",
@@ -821,16 +727,16 @@
       "SOLIDS"
     ],
     "score": [
-      6,
-      7
+      5,
+      3
     ],
     "racks": [
       0,
-      1
+      0
     ],
     "race": null,
     "fouls": [
-      4,
+      0,
       0
     ],
     "defences": [
@@ -841,29 +747,29 @@
       0,
       0
     ],
-    "shots": 26,
-    "innings": 9,
+    "shots": 13,
+    "innings": 5,
     "analytics": [
       {
-        "shots": 12,
-        "TSR": 0.333,
-        "CRR": 0.75,
+        "shots": 5,
+        "TSR": 0.2,
+        "CRR": 1.0,
         "SDR": 0.0
       },
       {
-        "shots": 14,
-        "TSR": 0.429,
+        "shots": 7,
+        "TSR": 0.286,
         "CRR": 1.0,
         "SDR": 0.0
       }
     ],
-    "winner": "Player 2",
-    "status": "PLAYER 2 WINS - RAN THE TABLE",
-    "pots": 15,
-    "phantoms": 0,
+    "winner": null,
+    "status": "PLAYER 1 CONTINUES",
+    "pots": 5,
+    "phantoms": 1,
     "replaced": 0,
     "reviews": 0,
-    "unexplained": 2,
-    "busy_frames": 954
+    "unexplained": 1,
+    "busy_frames": 251
   }
 }
