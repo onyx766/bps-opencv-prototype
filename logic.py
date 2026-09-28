@@ -745,6 +745,8 @@ class GameSession:
         # live run opens UNSTARTED and nothing is judged until START GAME.
         self.started = bool(started)
         self.all_pots = []
+        self.shot_log = []         # one entry per judged shot, for evaluate.py
+        self._shot = None          # ... the latest, so a re-judge can amend it
         self.ignored = []          # claims that did not survive a gate
         self.episodes = []         # every settling of the table, shot or not
         self.won_at = None         # frame a rack ended
@@ -901,9 +903,22 @@ class GameSession:
             return False
         f = games.merge(self.last_facts, add=add, remove=remove)
         game.shot_started(self.settled_at or self.frame)
+        first = len(game.record.events)
         game.shot_ended(f, self.frame)
         self.last_facts = f
+        if self._shot is not None:
+            self._fill_shot(self._shot, f, first)
         return True
+
+    def _fill_shot(self, entry, f, first):
+        """What went down on a shot, and the record events its verdict wrote.
+
+        The event seqs let evaluate.py drop a shot a player later undid: its
+        events are marked reverted in the record, and so the shot never counted.
+        """
+        entry["pots"] = list(f.pots)
+        entry["off_table"] = list(f.off_table)
+        entry["events"] = [e.seq for e in self.game.record.events[first:]]
 
     # ---- setting the table up ----------------------------------------------
 
@@ -1550,6 +1565,7 @@ class GameSession:
             return False
         self.table.learn_foot(positions)
         self.game.new_rack(frame)
+        self._shot = None
         self.won_at, self.candidates, self.racked_for = None, [], 0
         self.far_claims, self.vanished = [], []
         self.pending, self.held = None, 0
@@ -1750,13 +1766,25 @@ class GameSession:
         self.before_census = Counter(self.settled_census or {})
         self.settled_at = frame          # M-02 counts from here - shots only
         shooter = self.game.turn
+        broke = not self.game.struck
+        in_play = not self.game.over
         self.game.shot_started(frame)
         credited = self._settle_up(frame)
         record["credited"] = [p._asdict() for p in credited]
 
         was_open = getattr(self.game, "open_table", False)
         self.last_facts = self._facts(credited, moved)
+        first = len(self.game.record.events)
         self.game.shot_ended(self.last_facts, frame)
+        # A rack already decided is people knocking balls about before the
+        # re-rack; nothing there is a shot anyone should be scored against.
+        self._shot = None
+        if in_play:
+            self._shot = {"rack": self.game.rack, "shot": self.game.shot,
+                          "frame": frame, "seconds": round(frame / self.fps, 2),
+                          "shooter": shooter, "break": broke}
+            self._fill_shot(self._shot, self.last_facts, first)
+            self.shot_log.append(self._shot)
         self.last_credited = list(credited)
         self.candidates = []
         self._confirm_groups(shooter, credited, was_open)
@@ -2253,5 +2281,6 @@ class GameSession:
         out.update({"pots": len(self.all_pots), "phantoms": self.phantoms,
                     "replaced": self.replaced, "reviews": len(self.reviews),
                     "unexplained": len(self.unexplained),
-                    "busy_frames": self.busy_frames})
+                    "busy_frames": self.busy_frames,
+                    "fps": self.fps, "shots_log": self.shot_log})
         return out

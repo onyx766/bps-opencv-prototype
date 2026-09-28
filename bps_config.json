@@ -1,0 +1,6 @@
+{
+  "_comment": "Defaults for main.py. Keys are its option names with - as _. The command line overrides anything here.",
+  "game": "8ball",
+  "mode": "casual",
+  "target_fps": 5
+}

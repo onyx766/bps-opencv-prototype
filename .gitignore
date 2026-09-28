@@ -4,5 +4,8 @@
 # if none is found - supply the clip separately (a Drive link + this exact
 # filename dropped in here is the usual way) rather than adding it to git.
 *.mp4
+*.mkv
 *.jpg
 *.png
+__pycache__/
+.pytest_cache/

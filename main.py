@@ -34,7 +34,12 @@ THE HUD, AND WHY IT LOOKS THE WAY IT DOES
                   the score is final (M-03), CALL FOUL greyed once the next
                   stroke begins (F-10). A camera run opens in setup, where the
                   only two taps that exist are SET POCKETS and START GAME, and
-                  GAME OVER appears the moment the rack is decided.
+                  GAME OVER appears the moment the rack is decided. GAME OVER
+                  confirms the score, files that game's record and drops the
+                  HUD back into setup for the next one - a table sees game
+                  after game, and nobody should have to restart BPS between
+                  them. A rendered run has nobody to start the next game, so
+                  there it still ends the run.
     prompts       The questions the camera must not answer alone: confirm
                   groups with two thumbnails (M-06), a wedged pair (W-11), the
                   first rack on a new table (M-09), a league illegal break
@@ -52,6 +57,9 @@ Usage:
     python main.py --source video         # game.mp4 -> result.mp4, no window
     python main.py game.mp4               # a named clip, no menu
     python main.py game.mp4 --show        # ... and watch it, with the HUD
+    python main.py clips/                 # a folder of clips, back to back
+    python main.py "clips/*.mkv" --record viktor_record.json
+    python main.py --config venue.json    # settings file (bps_config.json)
     python main.py --game 9ball           # nine-ball rules
     python main.py --mode league --sl1 4 --sl2 6
     python main.py --mode practice        # analytics only (M-11)
@@ -75,9 +83,11 @@ League manual options:
 
 import argparse
 import csv
+import glob
 import json
 import math
 import os
+import re
 import sys
 import time
 from collections import deque
@@ -98,6 +108,15 @@ from track_identity import UNKNOWN_BGR, BallClassRegistry
 # Tried in order when no video argument is given - first one that exists wins.
 DEFAULT_VIDEOS = ["game.mp4", "test.mp4", "input.mp4"]
 DEFAULT_OUTPUT = "result.mp4"
+VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv")
+DEFAULT_CONFIG = "bps_config.json"
+
+#: The rate the rules were tuned at. Every frame-counted constant in logic.py
+#: (RACK_FRAMES, SETTLE_FRAMES, ...) was set on ~5 fps footage; a 90 fps
+#: camera fed frame-for-frame would make each of them eighteen times shorter
+#: in real time. So the source is sampled down to this, by stride for a file
+#: and by the clock for a camera.
+TARGET_FPS = 5.0
 
 #: A live camera keeps its own six pockets. Kept apart from pockets.json so a
 #: camera and a clip that happen to share a frame size - the check that guards
@@ -145,9 +164,157 @@ def find_default_video(folder):
         if os.path.exists(path):
             return path
     for name in sorted(os.listdir(folder)):
-        if name.lower().endswith((".mp4", ".mov", ".avi", ".mkv")):
+        if name.lower().endswith(VIDEO_EXTS):
             return os.path.join(folder, name)
     return None
+
+
+def _natural(path):
+    """clip_2 before clip_10: recorders number clips without zero padding."""
+    return [int(t) if t.isdigit() else t.lower()
+            for t in re.split(r"(\d+)", os.path.basename(path))]
+
+
+def expand_clips(specs, here):
+    """Video arguments -> an ordered list of files.
+
+    Each argument may be a file, a folder of clips, or a glob - PowerShell
+    does not expand globs itself, so this does. Files named on the command
+    line keep their order; a folder or glob is sorted naturally.
+    """
+    out = []
+    for spec in specs:
+        path = spec if os.path.isabs(spec) else os.path.join(here, spec)
+        if os.path.isdir(path):
+            found = [os.path.join(path, n) for n in os.listdir(path)
+                     if n.lower().endswith(VIDEO_EXTS)]
+            if not found:
+                sys.exit(f"No video clips in folder: {path}")
+            out.extend(sorted(found, key=_natural))
+        elif any(c in spec for c in "*?["):
+            found = [p for p in glob.glob(path) if p.lower().endswith(VIDEO_EXTS)]
+            if not found:
+                sys.exit(f"No video clips match: {spec}")
+            out.extend(sorted(found, key=_natural))
+        elif os.path.exists(path):
+            out.append(path)
+        else:
+            sys.exit(f"Video not found: {path}")
+    return out
+
+
+class ClipChain:
+    """Several clips read back to back as one video.
+
+    Saved ten-minute recordings from the table camera drop frames, so footage
+    may arrive as a run of one-minute clips. The rules need one continuous
+    game, so the clips are joined here and everything downstream sees a
+    single stream with one frame counter. Only read/grab/get/set/release are
+    provided - exactly what main() and bench.py call on a VideoCapture.
+    """
+
+    def __init__(self, paths):
+        self.paths = list(paths)
+        self.counts, self.starts = [], []
+        size = fps = None
+        total = 0
+        for p in self.paths:
+            cap = cv2.VideoCapture(p)
+            if not cap.isOpened():
+                sys.exit(f"Could not open video: {p}")
+            w, h = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            f = cap.get(cv2.CAP_PROP_FPS) or 0.0
+            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            cap.release()
+            if size is None:
+                size, fps = (w, h), f
+            elif (w, h) != size:
+                # Pockets are pixel coordinates: a clip at another size would
+                # be scored against a table that is not where it is drawn.
+                sys.exit(f"{os.path.basename(p)} is {w}x{h} but the first clip "
+                         f"is {size[0]}x{size[1]} - clips must share one size.")
+            elif fps and abs(f - fps) > 0.5:
+                print(f"        WARNING: {os.path.basename(p)} is {f:.1f} fps, "
+                      f"the first clip {fps:.1f} - clocks will drift")
+            self.starts.append(total)
+            self.counts.append(n)
+            total += n
+        self.total, self.fps = total, fps
+        self.i = -1
+        self.cap = None
+        self._open(0)
+
+    def _open(self, i):
+        if self.cap is not None:
+            self.cap.release()
+        self.i = i
+        self.cap = cv2.VideoCapture(self.paths[i])
+
+    def isOpened(self):
+        return self.cap is not None and self.cap.isOpened()
+
+    def _step(self, fn):
+        while True:
+            result = fn(self.cap)
+            ok = result[0] if isinstance(result, tuple) else result
+            if ok or self.i + 1 >= len(self.paths):
+                return result
+            self._open(self.i + 1)
+
+    def read(self):
+        return self._step(lambda c: c.read())
+
+    def grab(self):
+        return self._step(lambda c: c.grab())
+
+    def get(self, prop):
+        if prop == cv2.CAP_PROP_FRAME_COUNT:
+            return float(self.total)
+        if prop == cv2.CAP_PROP_FPS:
+            return self.fps
+        return self.cap.get(prop)
+
+    def set(self, prop, value):
+        if prop != cv2.CAP_PROP_POS_FRAMES:
+            return self.cap.set(prop, value)
+        value = int(value)
+        i = max(k for k, s in enumerate(self.starts) if s <= value)
+        self._open(i)
+        return self.cap.set(prop, value - self.starts[i])
+
+    def release(self):
+        if self.cap is not None:
+            self.cap.release()
+            self.cap = None
+
+
+def open_video(paths):
+    """One clip as a plain VideoCapture, several as a ClipChain."""
+    if len(paths) == 1:
+        return cv2.VideoCapture(paths[0])
+    return ClipChain(paths)
+
+
+def load_config(argv, here):
+    """Settings from a JSON file, applied as argparse defaults.
+
+    The game being played - 8-ball today - is a setting for the venue, not a
+    fact about the code, so it lives in bps_config.json beside this file.
+    Precedence: command line, then the config file, then the built-in default.
+    Keys are the argparse destinations (game, mode, target_fps, ...); keys
+    starting with "_" are comments.
+    """
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", default=DEFAULT_CONFIG)
+    known, _rest = pre.parse_known_args(argv)
+    path = known.config if os.path.isabs(known.config) else os.path.join(here, known.config)
+    if not os.path.exists(path):
+        if known.config != DEFAULT_CONFIG:
+            sys.exit(f"Config file not found: {path}")
+        return {}, None
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+    return {k: v for k, v in cfg.items() if not k.startswith("_")}, path
 
 
 class quiet_probe:
@@ -1278,9 +1445,21 @@ def save_table_memory(path, key, entry):
 
 
 def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    config, config_path = load_config(sys.argv[1:], here)
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("video", nargs="?", default=None,
-                    help=f"input video (default: first of {', '.join(DEFAULT_VIDEOS)})")
+    ap.add_argument("video", nargs="*", default=None,
+                    help=f"input video; several files, a folder or a glob are "
+                         f"played back to back as one game (default: first of "
+                         f"{', '.join(DEFAULT_VIDEOS)})")
+    ap.add_argument("--config", default=DEFAULT_CONFIG,
+                    help=f"JSON settings applied as defaults; the command line "
+                         f"still wins (default: {DEFAULT_CONFIG} if present)")
+    ap.add_argument("--target-fps", type=float, default=TARGET_FPS,
+                    help=f"frames judged per second of play; a faster source is "
+                         f"sampled down to this (default {TARGET_FPS:g}, what "
+                         f"the rules were tuned at; 0 = every frame)")
     ap.add_argument("--source", choices=("live", "video"), default=None,
                     help="camera or file; asked at startup when neither this "
                          "nor a video path is given")
@@ -1293,8 +1472,9 @@ def main():
                     help="window with a clickable HUD; automatic for a camera "
                          "and whenever the startup menu was answered, so this "
                          "is only needed alongside --source/--camera or a path")
-    ap.add_argument("--stride", type=int, default=1,
-                    help="process every Nth frame (default 1 = all)")
+    ap.add_argument("--stride", type=int, default=None,
+                    help="process every Nth frame; overrides --target-fps "
+                         "(default: chosen from --target-fps)")
     ap.add_argument("--start", type=int, default=0, help="first frame to read")
     ap.add_argument("--frames", type=int, default=0,
                     help="stop after N processed frames (0 = whole video)")
@@ -1377,9 +1557,19 @@ def main():
                     help="write the identity, pot and game logs to this JSON file")
     ap.add_argument("--label-scale", type=float, default=1.0,
                     help="multiplier on the overlay text size (default 1.0)")
+    unknown = sorted(set(config) - {a.dest for a in ap._actions})
+    if unknown:
+        sys.exit(f"Unknown setting(s) in {config_path}: {', '.join(unknown)}")
+    ap.set_defaults(**config)
     args = ap.parse_args()
+    for a in ap._actions:
+        if a.choices and a.dest in config and getattr(args, a.dest) not in a.choices:
+            sys.exit(f"{config_path}: {a.dest} must be one of {list(a.choices)}, "
+                     f"not {getattr(args, a.dest)!r}")
+    if config_path:
+        print(f"Config: {config_path}  "
+              + "  ".join(f"{k}={v}" for k, v in config.items()))
 
-    here = os.path.dirname(os.path.abspath(__file__))
     out_path = args.out if os.path.isabs(args.out) else os.path.join(here, args.out)
     record_path = args.record or os.path.splitext(out_path)[0] + "_record.json"
     if not os.path.isabs(record_path):
@@ -1401,7 +1591,7 @@ def main():
         if source == "live":
             args.camera = picked
         elif picked:
-            args.video = picked
+            args.video = [picked]
         # Someone answered a menu, so someone is sitting there watching: open
         # the window without making them find out about --show first. A run
         # driven by flags or a pipe is left alone, and still renders to
@@ -1426,27 +1616,37 @@ def main():
         # camera that can't do this just ignores the request and keeps its
         # native size - nothing downstream assumes this was granted, since W
         # and H are always read back from the delivered frame, not from here.
+        # MJPEG first: uncompressed YUYV at 1920 wide is limited by USB
+        # bandwidth to a few fps on the ELP and on a Pi's V4L2, where MJPEG
+        # delivers the camera's full rate.
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, LIVE_CAPTURE_W)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, LIVE_CAPTURE_H)
         # A rendered run cannot be tapped and a live one has every reason to
         # be watched: the window IS the point of pointing a camera at a table.
         args.show = True
     else:
-        if args.video is None:
+        if not args.video:
             in_path = find_default_video(here)
             if in_path is None:
                 sys.exit(f"No video found in {here}\n"
                          f"Put one of {', '.join(DEFAULT_VIDEOS)} there, "
                          f"or pass a path: python main.py clip.mp4")
+            clips = [in_path]
         else:
-            in_path = (args.video if os.path.isabs(args.video)
-                       else os.path.join(here, args.video))
-            if not os.path.exists(in_path):
-                sys.exit(f"Video not found: {in_path}")
+            clips = expand_clips(args.video, here)
+            in_path = clips[0]
 
-        cap = cv2.VideoCapture(in_path)
+        cap = open_video(clips)
         if not cap.isOpened():
             sys.exit(f"Could not open video: {in_path}")
+        if len(clips) > 1:
+            clip_fps = cap.get(cv2.CAP_PROP_FPS) or 25.0
+            print(f"Clips:  {len(clips)} played back to back as one game")
+            for path, start, n in zip(clips, cap.starts, cap.counts):
+                secs = int(start / clip_fps)
+                print(f"        {secs // 60:02d}:{secs % 60:02d}  "
+                      f"{os.path.basename(path)}  ({n} frames)")
 
     # A camera has no length, and reports its frame rate as 0 - or as 1000 -
     # often enough that it cannot be trusted with a division.
@@ -1454,6 +1654,21 @@ def main():
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 0.0
     if not 1.0 <= src_fps <= 240.0:
         src_fps = LIVE_FPS if live else 25.0
+
+    # A file is sampled by stride. A camera is sampled by the clock instead: its
+    # reported rate is too often wrong to divide by, and a slow machine that
+    # falls behind should skip frames rather than drift further into the past.
+    clock_sample = live and args.stride is None and args.target_fps > 0
+    if args.stride is None:
+        args.stride = (max(1, round(src_fps / args.target_fps))
+                       if args.target_fps > 0 and not live else 1)
+    sample_period = 1.0 / args.target_fps if clock_sample else 0.0
+    if clock_sample:
+        print(f"Sample: {args.target_fps:g} frames/s by the clock, the rest "
+              f"grabbed and dropped")
+    elif args.stride > 1:
+        print(f"Sample: 1 in {args.stride} frames "
+              f"({src_fps / args.stride:.1f} of {src_fps:.1f} fps)")
 
     if args.start:
         if live:
@@ -1521,7 +1736,8 @@ def main():
     label_scale = max(0.35, (H / 1080.0) * 0.95 * args.label_scale)
     board_h = max(96, int(round(H * BOARD_FRACTION)))
     bar_h = max(40, int(round(H * BAR_FRACTION)))
-    play_fps = max(1.0, src_fps / args.stride)
+    play_fps = max(1.0, min(args.target_fps, src_fps) if clock_sample
+                   else src_fps / args.stride)
 
     # Land near TARGET_PREVIEW_W wide, but not so tall the window runs off a
     # laptop screen: whichever bound is tighter wins, then both are clamped so
@@ -1544,20 +1760,31 @@ def main():
     memory = load_table_memory(memory_path, key)
     first_rack_ok = (not args.show) or bool(memory.get("first_rack_confirmed"))
 
-    session = logic.GameSession(pockets, cal["r"], fps=src_fps,
-                                players=(args.player_1, args.player_2),
-                                mouth=args.pot_radius, discipline=args.game,
-                                mode=args.mode, levels=(args.sl1, args.sl2),
-                                defence_marking=defence,
-                                pocket_marking=pocket_marking,
-                                first_rack_confirmed=first_rack_ok,
-                                sample_fps=play_fps, fmt=args.fmt,
-                                break_assigns=args.break_assigns == "on",
-                                innings_rule=args.innings,
-                                lag_winner=args.lag_winner - 1,
-                                # A clip is already a game; a camera is a room
-                                # someone is still racking a table in.
-                                started=not live)
+    def new_session(first_rack_ok, started):
+        """A game, built the one way. Called again for each GAME OVER.
+
+        The second game of the night has to be the same object as the first,
+        built from the same flags - so there is exactly one construction and
+        the reset path cannot quietly drift away from the opening one. The
+        pockets and the ball radius are read at call time, since SET POCKETS
+        can have replaced them since the run started.
+        """
+        return logic.GameSession(pockets, cal["r"], fps=src_fps,
+                                 players=(args.player_1, args.player_2),
+                                 mouth=args.pot_radius, discipline=args.game,
+                                 mode=args.mode, levels=(args.sl1, args.sl2),
+                                 defence_marking=defence,
+                                 pocket_marking=pocket_marking,
+                                 first_rack_confirmed=first_rack_ok,
+                                 sample_fps=play_fps, fmt=args.fmt,
+                                 break_assigns=args.break_assigns == "on",
+                                 innings_rule=args.innings,
+                                 lag_winner=args.lag_winner - 1,
+                                 started=started)
+
+    # A clip is already a game; a camera is a room someone is still racking a
+    # table in.
+    session = new_session(first_rack_ok, started=not live)
     game = session.game
     print(f"Game:   {args.game}  {args.mode}  {args.fmt} format  defence marking "
           f"{'on' if defence else 'off'}  pocket marking "
@@ -1601,15 +1828,54 @@ def main():
     idx = args.start
     processed = 0
     logged = 0
+    game_no = 1                # which game of this run is on the table
+    played = []                # ... and the record file each finished one left
     misses = 0
     counts = []
     id_counts = []
-    t0 = time.perf_counter()
+    t0 = taken_at = time.perf_counter()
     fps_now = 0.0
     first = True
     paused = False
     current = None
     finish = False
+
+    def end_game():
+        """GAME OVER on a HUD run: file this game, then back to setup.
+
+        A table sees game after game. Ending the process on GAME OVER meant
+        the next rack needed someone to go back to the laptop and start BPS
+        again, which is not what the button says and not how the room works.
+
+        What survives a reset is the TABLE - the six pockets, the felt
+        calibration built on them, and M-09's first-rack confirmation, which
+        is a fact about this table and was already earned. What does not
+        survive is the GAME: score, fouls, innings, prompts, ball identities
+        and the review buffer all belong to the rack that just ended, and the
+        next one starts from nothing. The record is written out first, because
+        a reset that dropped the score on the floor would be worse than the
+        exit it replaces.
+        """
+        nonlocal session, game, tracker, registry, review, logged, game_no
+        stem = os.path.splitext(record_path)[0]
+        path = f"{stem}_game{game_no}.json"
+        game.record.save(path, summary=session.summary())
+        played.append(path)
+        print(f"GAME OVER - {game.players[0]} {game.score(0)} - "
+              f"{game.score(1)} {game.players[1]}, {game.rack} rack(s), "
+              f"{game.shot} shots.  Saved: {path}")
+        print("        Back to setup: tap SET POCKETS to click them again, or "
+              "START GAME for the next game.")
+        game_no += 1
+        session = new_session(session.first_rack_confirmed, started=False)
+        game = session.game
+        tracker = Tracker()
+        registry = None if args.no_id else BallClassRegistry()
+        review = Review(play_fps, W, auto_close=not args.show)
+        # The event log is printed by position, so a fresh record starts the
+        # count over or the next game's first events are never shown.
+        logged = 0
+        flush_camera(cap, live)
 
     def do_tap(tap):
         """One tap. Returns True when it did something.
@@ -1637,10 +1903,17 @@ def main():
             return True
         if name == "game_over":
             # M-03: the score becomes final, which is exactly what CONFIRM
-            # FINAL does - this is that tap plus the end of the run.
+            # FINAL does - this is that tap plus what follows the game.
             if not session.game.record.final:
                 session.command("confirm")
-            finish = True
+            if args.show:
+                # Someone is standing at the table: hand them back a set-up
+                # table ready for the next game rather than a closed window.
+                end_game()
+            else:
+                # A rendered run has nobody to tap START GAME, so GAME OVER
+                # still means the run is done - that is what --taps uses it for.
+                finish = True
             return True
         return run_tap(session, review, tap)
 
@@ -1649,7 +1922,16 @@ def main():
             advanced = False
             if not paused or current is None:
                 if not first:
-                    ok, frame = cap.read()
+                    # A frame that will be skipped is only grabbed, never
+                    # decoded into an image - at 90 fps that is most of them.
+                    if clock_sample:
+                        skip = time.perf_counter() - taken_at < sample_period
+                    else:
+                        skip = args.stride > 1 and (idx + 1 - args.start) % args.stride
+                    if skip:
+                        ok = cap.grab()
+                    else:
+                        ok, frame = cap.read()
                     if not ok:
                         if not live:
                             break
@@ -1664,9 +1946,10 @@ def main():
                         continue
                     misses = 0
                     idx += 1
-                    if args.stride > 1 and (idx - args.start) % args.stride:
+                    if skip:
                         continue
                 first = False
+                taken_at = time.perf_counter()
 
                 if args.recalibrate and processed and processed % args.recalibrate == 0:
                     cal = calibrate(frame, tuple(args.felt_low),
@@ -1799,6 +2082,13 @@ def main():
                   f"mean {sum(id_counts) / len(id_counts):.1f}")
 
         summary = session.summary()
+        if played:
+            # A run that saw GAME OVER has games behind it, and the numbers
+            # below are only the one still on the table - which is usually an
+            # empty game somebody never started. Say so before printing them.
+            print(f"\nGames finished this run: {len(played)}  "
+                  f"({', '.join(os.path.basename(p) for p in played)})")
+            print("Below is the game currently on the table, not the run.")
         print(f"\nGame:   {game.players[0]} {game.score(0)} - {game.score(1)} "
               f"{game.players[1]}   ({args.game}, {args.mode})")
         if args.game == games.EIGHT_BALL:
@@ -1833,8 +2123,15 @@ def main():
             print(f"        H-04 VIOLATION - drawn on the HUD: "
                   f"{sorted(COPY_OFFENDERS)}")
 
-    game.record.save(record_path, summary=session.summary())
-    print(f"Saved:  {record_path}")
+    # The game on the table when the run ended. After a GAME OVER that game is
+    # often an untouched one nobody started, and writing it over the record
+    # would bury the game that was actually played behind an empty file.
+    if game.record.events or not played:
+        game.record.save(record_path, summary=session.summary())
+        print(f"Saved:  {record_path}")
+    else:
+        print(f"Saved:  {played[-1]} (nothing played since the last GAME OVER, "
+              f"so {os.path.basename(record_path)} was left alone)")
 
     if args.events:
         ev_path = (args.events if os.path.isabs(args.events)
