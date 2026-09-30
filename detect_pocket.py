@@ -23,6 +23,7 @@ Usage:
 
 In the click window:
     left click   drop a pocket marker (6 of them)
+    drag         press on a marker and move it
     u / BKSP     undo the last one
     r            start over
     ENTER/SPACE  accept (enabled once all six are down)
@@ -59,6 +60,11 @@ LOUPE_SIZE, LOUPE_ZOOM = 180, 4
 
 #: Marker colour for a placed pocket, and for the one being placed.
 POCKET_BGR = (60, 220, 255)
+
+#: How close, in on-screen pixels, a press must be to pick up an existing
+#: marker instead of dropping a new one. Held in screen pixels rather than
+#: frame pixels so the grab feels the same on a 1080p clip and a 4K one.
+GRAB_PX = 16
 
 Pocket = namedtuple("Pocket", "name x y")
 
@@ -184,9 +190,9 @@ def _draw_markers(display, points, view_scale):
 
 def _draw_help(display, placed):
     done = placed >= POCKET_COUNT
-    text = ("All 6 down - ENTER to accept" if done
+    text = ("All 6 down - drag to adjust, ENTER to accept" if done
             else f"Click pocket {placed + 1} of {POCKET_COUNT}")
-    keys = "u undo   r reset   ENTER accept   ESC cancel"
+    keys = "drag move   u undo   r reset   ENTER accept   ESC cancel"
     dw = display.shape[1]
     cv2.rectangle(display, (0, 0), (dw, 34), (0, 0, 0), -1)
     cv2.putText(display, text, (10, 23), cv2.FONT_HERSHEY_SIMPLEX, 0.62,
@@ -195,18 +201,27 @@ def _draw_help(display, placed):
                 cv2.FONT_HERSHEY_SIMPLEX, 0.52, (200, 200, 200), 1, cv2.LINE_AA)
 
 
-def select_pockets(frame, window=WINDOW):
+def select_pockets(frame, window=WINDOW, seed=None):
     """Show the frame, collect six clicks, return them in full-frame pixels.
 
     Returns None if the user cancelled (ESC, q, or closing the window), which
     the caller must treat as "no calibration" rather than as an empty one.
+
+    `seed` pre-places markers so the job is nudging rather than placing cold -
+    tune.py derives six from the table's outline. They are ordinary placed
+    points once here: u undoes them and r clears them like any other.
     """
     H, W = frame.shape[:2]
     view_scale = min(1.0, MAX_VIEW_W / float(W), MAX_VIEW_H / float(H))
     base = cv2.resize(frame, (int(W * view_scale), int(H * view_scale))) \
         if view_scale < 1.0 else frame.copy()
 
-    state = {"points": [], "cursor": None}
+    start = [(int(x), int(y)) for x, y in (seed or [])][:POCKET_COUNT]
+    state = {"points": start, "cursor": None, "drag": None}
+
+    # Grab distance for picking up an existing marker, in full-frame pixels
+    # that stay the same size on screen whatever the source resolution.
+    grab = GRAB_PX / view_scale
 
     def on_mouse(event, mx, my, _flags, _param):
         # Clicks arrive in view coordinates; store full-frame ones so the
@@ -214,8 +229,25 @@ def select_pockets(frame, window=WINDOW):
         fx = min(W - 1, max(0, int(round(mx / view_scale))))
         fy = min(H - 1, max(0, int(round(my / view_scale))))
         state["cursor"] = (fx, fy)
-        if event == cv2.EVENT_LBUTTONDOWN and len(state["points"]) < POCKET_COUNT:
-            state["points"].append((fx, fy))
+        points = state["points"]
+
+        if event == cv2.EVENT_LBUTTONDOWN:
+            # A press on a marker moves it; a press anywhere else adds one.
+            # Dragging matters because a marker rarely starts where it
+            # belongs - tune.py seeds all six from the table's outline, which
+            # lands within a few ball radii and never on the pocket itself.
+            near = [(i, (px - fx) ** 2 + (py - fy) ** 2)
+                    for i, (px, py) in enumerate(points)]
+            closest = min(near, key=lambda t: t[1], default=None)
+            if closest and closest[1] <= grab * grab:
+                state["drag"] = closest[0]
+            elif len(points) < POCKET_COUNT:
+                points.append((fx, fy))
+                state["drag"] = len(points) - 1
+        elif event == cv2.EVENT_MOUSEMOVE and state["drag"] is not None:
+            points[state["drag"]] = (fx, fy)
+        elif event == cv2.EVENT_LBUTTONUP:
+            state["drag"] = None
 
     try:
         cv2.namedWindow(window, cv2.WINDOW_AUTOSIZE)
